@@ -53,6 +53,7 @@
     "monaco-editor": "^0.55.1",
     "prettier": "^3.7.3",
     "resolve": "^1.22.11",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "moment": "2.29.4"
   }
 }
