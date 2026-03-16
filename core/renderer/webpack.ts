@@ -76,6 +76,11 @@ export function findByProps(props: string[], all = false) {
   }
 }
 
+// Set the locale for dates for moment.js and expose it to work anywhere
+export const moment = findByProps(['isMoment']) as typeof import('moment')
+findByProps(['isMoment']).locale(window.navigator.language)
+global.moment = moment // Expose moment globally for plugins
+
 export const React = findByProps([
   'createElement',
   'Component',
