@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" href="https://taut.jer.app/icon.png" />
     <title>Taut Options</title>
     <style>
       body {
@@ -32,12 +33,6 @@
         gap: 0.5rem;
         flex-wrap: wrap;
       }
-      .presets button {
-        padding: 0.375rem 0.75rem;
-        border: 1px solid #ccc;
-        background: #f5f5f5;
-        color: #000;
-      }
       button {
         padding: 0.5rem 1rem;
         cursor: pointer;
@@ -45,6 +40,12 @@
         color: #fff;
         border: none;
         font-size: 0.875rem;
+      }
+      .presets button {
+        padding: 0.375rem 0.75rem;
+        border: 1px solid #ccc;
+        background: #f5f5f5;
+        color: #000;
       }
     </style>
   </head>
@@ -54,14 +55,14 @@
       <input type="url" id="url" placeholder="https://taut.jer.app/taut.js" />
     </label>
     <div class="presets">
-      <button id="btn-official">Official</button>
-      <button id="btn-official-debug">Official (sourcemaps)</button>
-      <button id="btn-dev">Dev server</button>
+      <button type="button" id="btn-official">Official</button>
+      <button type="button" id="btn-official-debug">Official (sourcemaps)</button>
+      <button type="button" id="btn-dev">Dev server</button>
       <span id="btn-embedded-wrap" style="display: none">
-        <button id="btn-embedded">Embedded copy</button>
+        <button type="button" id="btn-embedded">Embedded copy</button>
       </span>
     </div>
-    <button id="save">Save</button>
+    <button type="button" id="save">Save</button>
     <script src="options.js"></script>
   </body>
 </html>

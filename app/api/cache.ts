@@ -1,101 +1,120 @@
 // Persistent cache with per-item TTL and fetch deduplication for plugin use
 
-export interface TautCache<T> {
-  load(): void
-  get(key: string): T | undefined
-  set(key: string, value: T): void
-  fetch(key: string, fetcher: () => Promise<T>): Promise<T>
-  clear(): void
-}
+import type { BlobStore } from '../../shared/TautBridge'
 
 type CacheEntry<T> = { value: T; ts: number }
+export type CacheOptions = { ttl: number; maxSize?: number }
 
-export function createCache<T>(
-  cacheKey: string,
-  options: { ttl: number; maxSize?: number }
-): TautCache<T> {
-  const { ttl, maxSize } = options
-  const STORAGE_KEY = `taut_cache_${cacheKey}`
+/**
+ * Persistent TTL cache with fetch-dedup
+ */
+export class Cache<T> {
+  private storageKey: string
+  private ttl: number
+  private maxSize?: number
+  private memory = new Map<string, CacheEntry<T>>()
+  private pending = new Map<string, Promise<T>>()
+  private revision = 0
+  private generation = 0
+  private writeQueue = Promise.resolve()
 
-  const memory = new Map<string, CacheEntry<T>>()
-  const pending = new Map<string, Promise<T>>()
-
-  function fresh(entry: CacheEntry<T>): boolean {
-    return Date.now() - entry.ts < ttl
+  constructor(
+    private blob: BlobStore,
+    cacheKey: string,
+    options: CacheOptions
+  ) {
+    this.storageKey = cacheKey
+    this.ttl = options.ttl
+    this.maxSize = options.maxSize
   }
 
-  function persist() {
+  private fresh(entry: CacheEntry<T>): boolean {
+    return Date.now() - entry.ts < this.ttl
+  }
+
+  private persist() {
+    const value = JSON.stringify(Object.fromEntries(this.memory))
+    this.writeQueue = this.writeQueue
+      .catch(() => {})
+      .then(async () => {
+        await this.blob.write(this.storageKey, value)
+      })
+  }
+
+  async load() {
+    if (this.revision !== 0) return
+    const revision = this.revision
     try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify(Object.fromEntries(memory))
-      )
+      const raw = await this.blob.read(this.storageKey)
+      if (!raw || revision !== this.revision || this.revision !== 0) return
+      const data = JSON.parse(raw) as Record<string, CacheEntry<T>>
+      for (const [k, entry] of Object.entries(data)) {
+        if (entry && typeof entry.ts === 'number' && this.fresh(entry)) {
+          this.memory.set(k, entry)
+        }
+      }
     } catch {}
   }
 
-  function write(key: string, value: T) {
-    memory.set(key, { value, ts: Date.now() })
-    if (maxSize !== undefined && memory.size > maxSize) {
-      for (const k of [...memory.keys()].slice(0, 100)) memory.delete(k)
+  get(key: string): T | undefined {
+    const entry = this.memory.get(key)
+    if (!entry) return undefined
+    if (!this.fresh(entry)) {
+      this.memory.delete(key)
+      return undefined
     }
-    persist()
+    return entry.value
   }
 
-  return {
-    load() {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY)
-        if (!raw) return
-        const data = JSON.parse(raw) as Record<string, CacheEntry<T>>
-        for (const [k, entry] of Object.entries(data)) {
-          if (entry && typeof entry.ts === 'number' && fresh(entry)) {
-            memory.set(k, entry)
-          }
-        }
-      } catch {}
-    },
-
-    get(key) {
-      const entry = memory.get(key)
-      if (!entry) return undefined
-      if (!fresh(entry)) {
-        memory.delete(key)
-        return undefined
+  set(key: string, value: T): void {
+    this.revision++
+    this.memory.set(key, { value, ts: Date.now() })
+    if (this.maxSize !== undefined && this.memory.size > this.maxSize) {
+      for (const k of [...this.memory.keys()].slice(0, 100)) {
+        this.memory.delete(k)
       }
-      return entry.value
-    },
+    }
+    this.persist()
+  }
 
-    set(key, value) {
-      write(key, value)
-    },
+  async fetch(key: string, fetcher: () => Promise<T>): Promise<T> {
+    const entry = this.memory.get(key)
+    if (entry && this.fresh(entry)) return entry.value
 
-    async fetch(key, fetcher) {
-      const entry = memory.get(key)
-      if (entry && fresh(entry)) return entry.value
+    const existing = this.pending.get(key)
+    if (existing) return existing
 
-      const existing = pending.get(key)
-      if (existing) return existing
+    const generation = this.generation
+    const promise = fetcher().then((value) => {
+      if (generation === this.generation) this.set(key, value)
+      return value
+    })
+    this.pending.set(key, promise)
+    promise
+      .finally(() => {
+        if (this.pending.get(key) === promise) this.pending.delete(key)
+      })
+      .catch(() => {})
+    return promise
+  }
 
-      const promise = (async () => {
-        try {
-          const value = await fetcher()
-          write(key, value)
-          return value
-        } finally {
-          pending.delete(key)
-        }
-      })()
+  clear(): void {
+    this.revision++
+    this.generation++
+    this.memory.clear()
+    this.pending.clear()
+    this.writeQueue = this.writeQueue
+      .catch(() => {})
+      .then(async () => {
+        await this.blob.delete(this.storageKey)
+      })
+  }
+}
 
-      pending.set(key, promise)
-      return promise
-    },
-
-    clear() {
-      memory.clear()
-      pending.clear()
-      try {
-        localStorage.removeItem(STORAGE_KEY)
-      } catch {}
-    },
+export function bindCache(blob: BlobStore) {
+  return class BoundCache<T> extends Cache<T> {
+    constructor(cacheKey: string, options: CacheOptions) {
+      super(blob, cacheKey, options)
+    }
   }
 }

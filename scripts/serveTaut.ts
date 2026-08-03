@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
-import path from 'path'
-import fs from 'fs'
+import fs from 'node:fs'
+import path from 'node:path'
 import build from './buildTaut'
 
 if (!('Bun' in globalThis)) {

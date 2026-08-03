@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
+
 // Builds the main Taut app bundle
 
-import path from 'path'
-import fs from 'fs'
-import { mkdir } from 'fs/promises'
+import fs from 'node:fs'
+import { mkdir } from 'node:fs/promises'
+import path from 'node:path'
+import { bundlePlugin } from './pluginBuild'
 
 if (!('Bun' in globalThis)) {
   console.error('This script must be run with Bun.')
@@ -40,23 +42,6 @@ function rewriteInlineSourcemaps(code: string): string {
   })
 }
 
-const globalPluginShim = {
-  name: 'global-plugin-shim',
-  setup(build: any) {
-    build.onResolve({ filter: /^\$taut$/ }, () => ({
-      path: '$taut',
-      namespace: 'taut-global',
-    }))
-    build.onLoad({ filter: /.*/, namespace: 'taut-global' }, () => ({
-      contents: `
-        export const TautPlugin = globalThis.TautPlugin
-        export default TautPlugin
-      `,
-      loader: 'js',
-    }))
-  },
-}
-
 // Step 1: bundle plugins into a Record<string, string>
 async function bundlePlugins(debug: boolean): Promise<Record<string, string>> {
   const plugins: Record<string, string> = {}
@@ -69,32 +54,11 @@ async function bundlePlugins(debug: boolean): Promise<Record<string, string>> {
     const name = path.basename(file, path.extname(file))
     console.log(`[build-taut] Bundling plugin: ${name}`)
 
-    const result = await Bun.build({
-      entrypoints: [path.join(PLUGINS_DIR, file)],
-      target: 'browser',
-      format: 'esm',
-      minify: !debug,
-      sourcemap: debug ? 'inline' : 'none',
-      plugins: [globalPluginShim],
-      define: { process: 'undefined' },
-    })
-
-    if (!result.success) {
-      console.error(
-        `[build-taut] Failed to bundle plugin ${name}:`,
-        result.logs
-      )
-      continue
+    try {
+      plugins[name] = await bundlePlugin(path.join(PLUGINS_DIR, file), debug)
+    } catch (err) {
+      console.error(`[build-taut] Failed to bundle plugin ${name}:`, err)
     }
-
-    let code = await result.outputs[0].text()
-    code = '(() => {\n' + code + '\n})()'
-    code = code.replace(
-      /export\s*{\s*(\w+)\s+as\s+default\s*};?/g,
-      'return $1;'
-    )
-    code = code.replace(/export\s+default\s+(\w+);?/g, 'return $1;')
-    plugins[name] = code
   }
 
   return plugins
@@ -114,9 +78,9 @@ async function bundleApp(
     minify: !debug,
     sourcemap: debug ? 'inline' : 'none',
     define: {
-      '__TAUT_BUNDLED_PLUGINS__': JSON.stringify(plugins),
-      '__TAUT_VERSION__': JSON.stringify(TAUT_VERSION),
-      'process': 'undefined',
+      __TAUT_BUNDLED_PLUGINS__: JSON.stringify(plugins),
+      __TAUT_VERSION__: JSON.stringify(TAUT_VERSION),
+      process: 'undefined',
       'import.meta.url': 'self.location.href',
     },
   })

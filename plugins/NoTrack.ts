@@ -27,12 +27,13 @@ function globToRegex(pattern: string): RegExp {
   const escaped = pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*/g, '.*')
-  return new RegExp('^' + escaped + '$', 'i')
+  return new RegExp(`^${escaped}$`, 'i')
 }
 
 const BLOCKED_RESPONSE = new Response('', { status: 200 })
 
 export default class NoTrack extends TautPlugin {
+  static readonly id = 'NoTrack'
   static readonly pluginName = 'No Tracking'
   static readonly description =
     "Blocks Slack's built-in tracking and analytics requests"
@@ -64,7 +65,7 @@ export default class NoTrack extends TautPlugin {
     // Patch fetch
     this.originalFetch = window.fetch
     const originalFetch = this.originalFetch
-    // @ts-ignore our arrow function lacks non-essential static fetch properties
+    // @ts-expect-error our arrow function lacks non-essential static fetch properties
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       if (this.isBlocked(NoTrack.urlString(input))) {
         return Promise.resolve(BLOCKED_RESPONSE.clone())
@@ -85,7 +86,7 @@ export default class NoTrack extends TautPlugin {
         this.send = () => {}
         return
       }
-      return (originalOpen as Function).call(this, method, url, ...rest)
+      return Reflect.apply(originalOpen, this, [method, url, ...rest])
     }
 
     this.log('Started, blocking', this.matchers.length, 'patterns')

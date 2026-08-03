@@ -22,6 +22,7 @@ function fileExtension(name: string): string {
 }
 
 export default class AnonymizeFileNames extends TautPlugin {
+  static readonly id = 'AnonymizeFilenames'
   static readonly pluginName = 'Anonymize Filenames'
   static readonly description =
     'Randomizes file names before uploading to prevent metadata leakage'

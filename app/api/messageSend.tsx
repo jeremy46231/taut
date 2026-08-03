@@ -2,8 +2,8 @@
 // Patches the three Slack components that handle outgoing messages once,
 // then lets plugins register/unregister transform functions at any time.
 
-import type { componentReplacer } from '../slack/react'
 import type { Delta } from '../../shared/Plugin'
+import type { componentReplacer } from '../slack/react'
 
 type PatchComponent = <TProps>(
   name: string,

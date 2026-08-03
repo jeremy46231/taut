@@ -1,6 +1,6 @@
-import { existsSync, readdirSync } from 'fs'
-import { join } from 'path'
-import os from 'os'
+import { existsSync, readdirSync } from 'node:fs'
+import os from 'node:os'
+import { join } from 'node:path'
 
 export function findSlackAsar(): string {
   const candidates: string[] = []

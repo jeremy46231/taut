@@ -11,8 +11,11 @@ const REDIRECTS: Record<string, string> = {
   '/taut-chrome.zip': `${GH}/latest/taut-chrome.zip`,
   '/taut-firefox.xpi': `${GH}/latest/taut-firefox.xpi`,
   '/taut-mac.dmg': `${GH}/latest/taut-mac.dmg`,
+  '/taut-mac-x64.dmg': `${GH}/latest/taut-mac-x64.dmg`,
   '/taut-win.exe': `${GH}/latest/taut-win.exe`,
+  '/taut-win-arm.exe': `${GH}/latest/taut-win-arm.exe`,
   '/taut-linux.AppImage': `${GH}/latest/taut-linux.AppImage`,
+  '/taut-linux-arm.AppImage': `${GH}/latest/taut-linux-arm.AppImage`,
 }
 
 export default {

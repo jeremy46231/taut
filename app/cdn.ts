@@ -11,14 +11,14 @@ const rgbCsvToHex = (rgb: string) => {
   if (!rgb) return undefined
 
   const parts = rgb.split(',').map((v) => Number(v.trim()))
-  if (parts.length !== 3 || parts.some((v) => isNaN(v))) {
+  if (parts.length !== 3 || parts.some((v) => Number.isNaN(v))) {
     console.warn('[Taut] Invalid RGB value:', rgb)
     return undefined
   }
 
   const [r, g, b] = parts
 
-  return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`
 }
 
 let monaco: Monaco | undefined
@@ -28,7 +28,7 @@ let jsoncPromise: Promise<JsoncParser> | null = null
 export function initJsonc(): Promise<JsoncParser> {
   if (jsoncPromise) return jsoncPromise
   jsoncPromise = (async () => {
-    // @ts-ignore
+    // @ts-expect-error
     return await import('https://cdn.jsdelivr.net/npm/jsonc-parser@3.3.1/+esm')
   })()
   return jsoncPromise
@@ -74,12 +74,13 @@ export function initMonaco(): Promise<Monaco> {
       typeof global.process !== 'undefined' &&
       global.process.env === undefined
     ) {
-      ;(global.vscode ??= {}).process = { ...global.process, env: {} }
+      global.vscode ??= {}
+      global.vscode.process = { ...global.process, env: {} }
     }
 
-    const monacoLoaderModule =
-      // @ts-ignore
-      await import('https://cdn.jsdelivr.net/npm/@monaco-editor/loader@1.7.0/+esm')
+    const monacoLoaderUrl =
+      'https://cdn.jsdelivr.net/npm/@monaco-editor/loader@1.7.0/+esm'
+    const monacoLoaderModule = await import(monacoLoaderUrl)
     const monacoLoader =
       monacoLoaderModule.default as typeof import('@monaco-editor/loader').default
     const _monaco = await monacoLoader.init()

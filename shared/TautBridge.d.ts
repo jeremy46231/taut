@@ -7,7 +7,7 @@
  * Plugin configuration object stored in config.jsonc
  * Each plugin has an `enabled` flag and can have additional custom properties
  */
-export interface TautPluginConfig {
+export type TautPluginConfig = {
   enabled: boolean
   [key: string]: unknown
 }
@@ -16,7 +16,7 @@ export interface TautPluginConfig {
  * Paths to Taut directories and files
  * Used by Electron backend for filesystem operations
  */
-export interface TautPaths {
+export type TautPaths = {
   /** Root Taut configuration directory */
   tautDir: string
   /** Directory containing core plugins */
@@ -36,12 +36,38 @@ export interface TautPaths {
 /** Cleanup function returned by subscription methods */
 export type Unsubscribe = () => void
 
+/** Generic string key/value store scoped to a caller-chosen namespace */
+export type BlobStore = {
+  /** List all keys currently stored in this namespace. */
+  list(): Promise<string[]>
+  /** Read a value, or null if not found. */
+  read(key: string): Promise<string | null>
+  /** Write (create or overwrite) a value. @returns true on success. */
+  write(key: string, value: string): Promise<boolean>
+  /** Delete a single key. @returns true on success. */
+  delete(key: string): Promise<boolean>
+  /** Delete every key in this namespace. @returns true on success. */
+  clear(): Promise<boolean>
+}
+
+export type TautCookie = {
+  name: string
+  value: string
+  domain?: string
+  path?: string
+  secure?: boolean
+  httpOnly?: boolean
+  sameSite?: 'no_restriction' | 'lax' | 'strict' | 'unspecified'
+  /** Expiry in Unix seconds. Omit for a session cookie. */
+  expirationDate?: number
+}
+
 /**
  * TautBridge interface
  * Abstracts the communication layer between the app and backend.
  * Implemented by each loader: Chrome extension, Firefox extension, Electron preload.
  */
-export interface TautBridge {
+export type TautBridge = {
   /** Which loader is providing this bridge */
   readonly loader:
     | 'chrome-extension'
@@ -115,6 +141,45 @@ export interface TautBridge {
    * CORS-bypassing fetch.
    */
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>
+
+  /**
+   * Cookie read/write outside the page sandbox, or `null` if the loader can't
+   * do it (e.g. a userscript manager without `GM_cookie`).
+   */
+  readonly cookies: null | {
+    get(details: { url: string; name: string }): Promise<TautCookie | null>
+    getAll(details: {
+      url?: string
+      domain?: string
+      name?: string
+    }): Promise<TautCookie[]>
+    /** `url` selects the cookie store and provides default domain/path. */
+    set(cookie: TautCookie & { url: string }): Promise<boolean>
+    remove(details: { url: string; name: string }): Promise<boolean>
+  }
+
+  /**
+   * Taut-private key/value store for secrets (e.g. saved account tokens),
+   * backed by GM storage / `chrome.storage.local` / a file in `tautDir`. Kept
+   * out of `config.jsonc` (user-editable, shown in the editor).
+   * @returns the stored string, or `null` if unset.
+   */
+  readSecret(key: string): Promise<string | null>
+  /** Write a secret. @returns true on success. Added in bridgeVersion 2. */
+  writeSecret(key: string, value: string): Promise<boolean>
+
+  /** Read-write store of pre-compiled user plugin code, keyed by plugin id. */
+  readonly userPlugins: {
+    list(): Promise<string[]>
+    read(id: string): Promise<string | null>
+    write(id: string, code: string): Promise<boolean>
+    delete(id: string): Promise<boolean>
+    /** Subscribe to external user plugin changes */
+    onChange(cb: (id: string, code: string | null) => void): Unsubscribe
+  }
+
+  /** Get a BlobStore scoped to a specific namespace */
+  blobStore(namespace: string): BlobStore
 
   /**
    * Paths to Taut directories and files

@@ -1,6 +1,6 @@
 {
   "name": "taut",
-  "version": "2.0.1",
+  "version": "2.4.3",
   "description": "Client mod for Slack",
   "license": "MIT",
   "author": {
@@ -18,21 +18,24 @@
   "scripts": {
     "build": "bun run build:taut && bun run build:extension && bun run build:userscript",
     "build:taut": "bun ./scripts/buildTaut.ts",
+    "build:user-plugin": "bun ./scripts/buildUserPlugin.ts",
     "build:extension": "bun ./scripts/buildExtension.ts",
     "build:userscript": "bun ./scripts/buildUserscript.ts",
     "build:desktop": "bun ./scripts/buildDesktop.ts",
+    "build:icons": "bun ./scripts/buildIcons.ts",
     "dev": "bun ./scripts/serveTaut.ts",
-    "format": "prettier --write .",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "typecheck": "tsc --noEmit",
+    "check": "biome check . && tsc --noEmit",
+    "fix": "biome check --write . && tsc --noEmit",
     "server:dev": "wrangler dev --config server/wrangler.jsonc",
     "server:deploy": "wrangler deploy --config server/wrangler.jsonc"
   },
-  "keywords": [
-    "taut",
-    "slack",
-    "mod",
-    "patcher"
-  ],
+  "keywords": ["taut", "slack", "mod", "patcher"],
   "devDependencies": {
+    "@biomejs/biome": "2.5.4",
+    "@cloudflare/workers-types": "^4.20260609.1",
     "@monaco-editor/loader": "^1.7.0",
     "@types/bun": "^1.3.5",
     "@types/chrome": "^0.1.43",
@@ -48,9 +51,8 @@
     "fflate": "^0.8.3",
     "jsonc-parser": "^3.3.1",
     "monaco-editor": "^0.55.1",
-    "prettier": "^3.7.3",
+    "sharp": "^0.34.5",
     "typescript": "^5.9.3",
-    "@cloudflare/workers-types": "^4.20260609.1",
     "wrangler": "^4.98.0"
   }
 }

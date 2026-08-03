@@ -22,7 +22,9 @@
     textContent: s.textContent,
     type: s.getAttribute('type'),
   }))
-  doc.querySelectorAll('script').forEach((s) => s.remove())
+  doc.querySelectorAll('script').forEach((s) => {
+    s.remove()
+  })
 
   // Inject: bridge-setup (sets window.TautBridge), then taut.js, then Slack's scripts
   const scriptError = (/** @type {string} */ url) =>
@@ -49,60 +51,56 @@
   }
 
   document.open()
-  document.write('<!DOCTYPE html>' + doc.documentElement.outerHTML)
+  document.write(`<!DOCTYPE html>${doc.documentElement.outerHTML}`)
   document.close()
 
   // Connect the bridge to the backend
   // these event listeners must be set up after the document.write shenanigans above
 
   window.addEventListener('message', async (event) => {
-    if (event.source !== window || !event.data?.__taut) return
-    const { type, id, key, value, url, init } = event.data
+    if (event.source !== window) return
+    const msg = event.data
+    if (!msg?.__taut || msg.kind !== 'rpc') return
 
-    if (type === 'storage:get') {
-      const result = await chrome.storage.local.get(key)
-      window.postMessage({
-        __taut: true,
-        type: 'storage:response',
-        id,
-        value: result[key] ?? null,
+    let result
+    try {
+      result = await chrome.runtime.sendMessage({
+        method: msg.method,
+        args: msg.args,
       })
-    } else if (type === 'storage:set') {
-      await chrome.storage.local.set({ [key]: value })
-      window.postMessage({ __taut: true, type: 'storage:response', id })
-    } else if (type === 'fetch:request') {
-      try {
-        const response = await chrome.runtime.sendMessage({
-          type: 'fetch:request',
-          url,
-          init,
-        })
-        window.postMessage({
-          __taut: true,
-          type: 'fetch:response',
-          id,
-          ...response,
-        })
-      } catch (e) {
-        window.postMessage({
-          __taut: true,
-          type: 'fetch:response',
-          id,
-          error: String(e),
-        })
-      }
+    } catch (e) {
+      result = { ok: false, error: String(e) }
     }
+    window.postMessage({
+      __taut: true,
+      kind: 'rpc:result',
+      id: msg.id,
+      ...result,
+    })
   })
 
-  // Forward storage changes from other tabs to main world
+  // Forward storage changes (this or another tab) to the page as events
+  const USER_PLUGIN_PREFIX = 'taut-user-plugin:'
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return
     for (const [key, { newValue }] of Object.entries(changes)) {
+      if (key.startsWith(USER_PLUGIN_PREFIX)) {
+        window.postMessage({
+          __taut: true,
+          kind: 'event',
+          name: 'userPlugin.changed',
+          payload: {
+            id: key.slice(USER_PLUGIN_PREFIX.length),
+            code: newValue ?? null,
+          },
+        })
+        continue
+      }
       window.postMessage({
         __taut: true,
-        type: 'storage:changed',
-        key,
-        newValue,
+        kind: 'event',
+        name: 'storage.changed',
+        payload: { key, newValue: newValue ?? null },
       })
     }
   })

@@ -17,12 +17,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - id: check
         run: |
+          BEFORE="${{ github.event.before }}"
+          [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] && BEFORE="HEAD~1"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || \
-             git diff HEAD~1 HEAD --name-only 2>/dev/null | grep -q 'desktop/package.json'; then
+             git log "$BEFORE..HEAD" -- desktop/package.json | grep -q .; then
             echo "desktop=true" >> $GITHUB_OUTPUT
           else
             echo "desktop=false" >> $GITHUB_OUTPUT
@@ -66,8 +68,65 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install
 
+      - name: Check for signing certificate
+        id: signing
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+        run: |
+          if [ -n "$MAC_CERT_P12" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::MAC_CERT_P12 not set; building macOS app UNSIGNED (notifications will not register)."
+          fi
+
+      - name: Set up macOS signing keychain
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/taut-signing.keychain-db"
+          KEYCHAIN_PW="$(openssl rand -base64 24)"
+          P12="$RUNNER_TEMP/taut-cert.p12"
+          CER="$RUNNER_TEMP/taut-cert.cer"
+
+          echo "$MAC_CERT_P12" | base64 --decode > "$P12"
+
+          # Create, configure and unlock a dedicated keychain
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+
+          # Import cert + private key; let codesign use the key non-interactively
+          security import "$P12" -P "$MAC_CERT_PASSWORD" -f pkcs12 \
+            -k "$KEYCHAIN" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
+
+          # Trust the self-signed cert as a code-signing anchor so that
+          # `security find-identity -v` (used by electron-builder) lists it.
+          openssl pkcs12 -legacy -in "$P12" -clcerts -nokeys \
+            -passin pass:"$MAC_CERT_PASSWORD" -out "$CER"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$CER"
+
+          # Put our keychain first in the search list so it's discoverable
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | tr -d '"')
+
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
       - name: Build desktop (all platforms)
-        run: bun scripts/buildDesktop.ts mac win linux
+        env:
+          CSC_NAME:
+            ${{ steps.signing.outputs.enabled == 'true' && 'Taut Code Signing'
+            || '' }}
+          CSC_KEYCHAIN:
+            ${{ steps.signing.outputs.enabled == 'true' &&
+            format('{0}/taut-signing.keychain-db', runner.temp) || '' }}
+        run: bun scripts/buildDesktop.ts all
 
       - name: Publish desktop to latest release
         env:

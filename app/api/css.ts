@@ -27,7 +27,7 @@ export function removeStyle(key: string) {
   const styleElement = document.getElementById(
     styleElementIdPrefix + key
   ) as HTMLStyleElement | null
-  if (styleElement && styleElement.parentNode) {
+  if (styleElement?.parentNode) {
     styleElement.parentNode.removeChild(styleElement)
   }
   updateMonacoTheme()

@@ -1,14 +1,16 @@
 #!/usr/bin/env bun
+
 // Builds and packages the Taut desktop app with electron-builder
 
-import path from 'path'
-import { cp, mkdir, rm, rename, readFile, writeFile } from 'fs/promises'
-import { existsSync } from 'fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import {
-  build as electronBuild,
-  Platform,
   Arch,
   type Configuration,
+  build as electronBuild,
+  Platform,
 } from 'electron-builder'
 
 if (!('Bun' in globalThis)) {
@@ -25,6 +27,8 @@ const DIST = path.join(ROOT, 'dist')
 const OUT = path.join(DIST, 'desktop')
 const BUILD_ROOT = path.join(DESKTOP, 'build')
 const STAGE = path.join(BUILD_ROOT, 'app')
+const ICON = path.join(ROOT, 'assets', 'logo.png')
+const MAC_ICON = path.join(ROOT, 'assets', 'logo-macos.png')
 
 /** Version of the taut.js app bundle (root package.json) */
 const TAUT_VERSION: string = JSON.parse(
@@ -34,6 +38,26 @@ const TAUT_VERSION: string = JSON.parse(
 const DESKTOP_VERSION: string = JSON.parse(
   await readFile(path.join(DESKTOP, 'package.json'), 'utf8')
 ).version
+
+const MAC_SIGN_IDENTITY = 'Taut Code Signing'
+
+function resolveMacIdentity(): string | null | undefined {
+  if (process.env.CSC_LINK || process.env.CSC_NAME) return undefined
+  if (process.platform !== 'darwin') return null
+  try {
+    const out = execFileSync(
+      'security',
+      ['find-identity', '-v', '-p', 'codesigning'],
+      { encoding: 'utf8' }
+    )
+    if (out.includes(MAC_SIGN_IDENTITY)) return MAC_SIGN_IDENTITY
+  } catch {
+    // `security` unavailable or no identities; fall through to skip signing
+  }
+  return null
+}
+
+const MAC_IDENTITY = resolveMacIdentity()
 
 type Variant = 'standard' | 'embedded'
 type PlatformKey = 'mac' | 'mac-x64' | 'win' | 'win-arm' | 'linux' | 'linux-arm'
@@ -63,7 +87,7 @@ interface PlatformDef {
 }
 
 const PLATFORMS: Record<PlatformKey, PlatformDef> = {
-  'mac': {
+  mac: {
     platform: Platform.MAC,
     os: 'mac',
     targets: ['dmg'],
@@ -77,7 +101,7 @@ const PLATFORMS: Record<PlatformKey, PlatformDef> = {
     archs: [Arch.x64],
     nameArch: '-x64',
   },
-  'win': {
+  win: {
     platform: Platform.WINDOWS,
     os: 'win',
     targets: ['nsis'],
@@ -91,7 +115,7 @@ const PLATFORMS: Record<PlatformKey, PlatformDef> = {
     archs: [Arch.arm64],
     nameArch: '-arm',
   },
-  'linux': {
+  linux: {
     platform: Platform.LINUX,
     os: 'linux',
     targets: ['AppImage'],
@@ -107,44 +131,41 @@ const PLATFORMS: Record<PlatformKey, PlatformDef> = {
   },
 }
 
-const DEFAULT_PLATFORMS: PlatformKey[] = ['mac', 'win', 'linux']
+const PLATFORM_KEYS = Object.keys(PLATFORMS) as PlatformKey[]
+const VARIANT_KEYS: Variant[] = ['standard', 'embedded']
 
 // Selectors
 
 function getCombos(): Array<{ platform: PlatformKey; variant: Variant }> {
   const args = process.argv.slice(2)
-  const flags = args.filter((a) => a.startsWith('--'))
-  const positional = args.filter((a) => !a.startsWith('--'))
+  const platforms = new Set<PlatformKey>()
+  const variants = new Set<Variant>()
 
-  for (const f of flags) {
-    if (f !== '--embedded' && f !== '--both') {
+  for (const arg of args) {
+    if (arg === 'all') {
+      for (const p of PLATFORM_KEYS) platforms.add(p)
+    } else if ((PLATFORM_KEYS as string[]).includes(arg)) {
+      platforms.add(arg as PlatformKey)
+    } else if ((VARIANT_KEYS as string[]).includes(arg)) {
+      variants.add(arg as Variant)
+    } else {
       console.error(
-        `[build-desktop] Unknown flag "${f}". Valid: --embedded, --both`
+        `[build-desktop] Unknown name "${arg}". Valid platforms: ${PLATFORM_KEYS.join(', ')}, all. Valid variants: ${VARIANT_KEYS.join(', ')}`
       )
       process.exit(1)
     }
   }
 
-  const variants: Variant[] = flags.includes('--both')
-    ? ['standard', 'embedded']
-    : flags.includes('--embedded')
-      ? ['embedded']
-      : ['standard']
-
-  for (const p of positional) {
-    if (!(p in PLATFORMS)) {
-      console.error(
-        `[build-desktop] Unknown platform "${p}". Valid: ${Object.keys(PLATFORMS).join(', ')}`
-      )
-      process.exit(1)
-    }
+  if (platforms.size === 0) {
+    console.error(
+      `[build-desktop] Specify at least one platform to build. Valid: ${PLATFORM_KEYS.join(', ')}, all`
+    )
+    process.exit(1)
   }
-  const platforms = (
-    positional.length ? [...new Set(positional)] : DEFAULT_PLATFORMS
-  ) as PlatformKey[]
+  if (variants.size === 0) variants.add('standard')
 
-  return variants.flatMap((variant) =>
-    platforms.map((platform) => ({ variant, platform }))
+  return [...variants].flatMap((variant) =>
+    [...platforms].map((platform) => ({ variant, platform }))
   )
 }
 
@@ -235,6 +256,8 @@ async function buildJs(variant: Variant) {
     ),
     'utf8'
   )
+
+  await cp(ICON, path.join(STAGE, 'icon.png'))
 }
 
 // electron-builder config per (variant, platform)
@@ -273,11 +296,18 @@ function makeConfig(variant: Variant, pk: PlatformKey): Configuration {
     protocols: [{ name: 'Slack URL', schemes: ['slack'], role: 'Viewer' }],
     artifactName,
     mac: {
+      icon: MAC_ICON,
       category: 'public.app-category.productivity',
-      // Skip signing unless real certs are provided (CSC_LINK/CSC_NAME).
-      identity: process.env.CSC_LINK || process.env.CSC_NAME ? undefined : null,
+      identity: MAC_IDENTITY,
+      hardenedRuntime: false,
+      gatekeeperAssess: false,
     },
-    linux: { category: 'Utility', mimeTypes: ['x-scheme-handler/slack'] },
+    win: { icon: ICON },
+    linux: {
+      icon: ICON,
+      category: 'Utility',
+      mimeTypes: ['x-scheme-handler/slack'],
+    },
   }
 }
 
@@ -304,6 +334,15 @@ async function packageVariant(variant: Variant, platforms: PlatformKey[]) {
 
   for (const pk of platforms) {
     const def = PLATFORMS[pk]
+    if (def.os === 'mac') {
+      const how =
+        MAC_IDENTITY === undefined
+          ? 'cert from CSC_LINK/CSC_NAME'
+          : MAC_IDENTITY
+            ? `identity "${MAC_IDENTITY}"`
+            : 'UNSIGNED (no cert found; notifications and stuff will not register)'
+      console.log(`[build-desktop] macOS signing: ${how}`)
+    }
     const artifacts = await electronBuild({
       projectDir: DESKTOP,
       targets: def.platform.createTarget(def.targets, ...def.archs),
@@ -327,7 +366,7 @@ const combos = getCombos()
 const byVariant = new Map<Variant, Set<PlatformKey>>()
 for (const { platform, variant } of combos) {
   if (!byVariant.has(variant)) byVariant.set(variant, new Set())
-  byVariant.get(variant)!.add(platform)
+  byVariant.get(variant)?.add(platform)
 }
 
 try {

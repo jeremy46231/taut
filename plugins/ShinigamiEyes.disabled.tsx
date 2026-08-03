@@ -1,7 +1,7 @@
 // Shows Hackatime trust level indicators next to user names in Slack
 // Broken because the Hackatime API changed
 
-import { TautPlugin, type TautPluginConfig, type TautAPI } from '$taut'
+import { type TautAPI, TautPlugin, type TautPluginConfig } from '$taut'
 
 const API_URL = 'https://hackatime.hackclub.com/api/admin/v1/execute'
 
@@ -38,6 +38,7 @@ type AuditLog = {
 }
 
 export default class ShinigamiEyes extends TautPlugin {
+  static readonly id = 'ShinigamiEyes'
   static readonly pluginName = 'Shinigami Eyes'
   static readonly description =
     'Displays Hackatime trust level indicators next to user names in Slack'
@@ -57,13 +58,10 @@ export default class ShinigamiEyes extends TautPlugin {
 
   trustLevels: Record<string, trustLevel> = {}
 
-  private cache = this.api.createCache<Record<string, trustLevel>>(
+  private cache = new this.api.Cache<Record<string, trustLevel>>(
     'shinigami_trust_levels',
     { ttl: 24 * 60 * 60 * 1000 }
   )
-
-  private unpatchBaseMessageSender = () => {}
-  private unpatchMemberProfileHoverCard = () => {}
 
   constructor(api: TautAPI, config: TautPluginConfig) {
     super(api, config)
@@ -80,16 +78,12 @@ export default class ShinigamiEyes extends TautPlugin {
 
     this.initializeTrustLevels()
 
-    const MrkdwnElement = this.api.findComponent<{
-      text: string
-    }>('MrkdwnElement')
-
-    const instance = this
+    const MrkdwnElement = this.api.elements.MrkdwnElement
 
     // Only patch message sender to add trust level emoji if enabled in config
     if (this.config.nameEmojis !== false) {
       // Patch Message component to add trust level CSS classes
-      this.unpatchBaseMessageSender = this.api.patchComponent<{
+      this.api.patchComponent<{
         botId?: string
         userId?: string
         className?: string
@@ -100,7 +94,7 @@ export default class ShinigamiEyes extends TautPlugin {
         const [trustLevel, setTrustLevel] = React.useState<trustLevel | null>(
           () => {
             if (!userId || isBotMessage) return null
-            return instance.trustLevels[userId] ?? null
+            return this.trustLevels[userId] ?? null
           }
         )
 
@@ -108,9 +102,9 @@ export default class ShinigamiEyes extends TautPlugin {
           if (!userId || isBotMessage) return
 
           // If we have a cached status, use it
-          if (instance.trustLevels[userId] !== undefined) {
-            if (trustLevel !== instance.trustLevels[userId]) {
-              setTrustLevel(instance.trustLevels[userId])
+          if (this.trustLevels[userId] !== undefined) {
+            if (trustLevel !== this.trustLevels[userId]) {
+              setTrustLevel(this.trustLevels[userId])
             }
           }
         }, [userId, isBotMessage])
@@ -127,19 +121,17 @@ export default class ShinigamiEyes extends TautPlugin {
           />
         )
       })
-    } else {
-      this.unpatchBaseMessageSender = () => {}
     }
 
     // Patch MemberProfileHoverCard to show trust level and audit logs
-    this.unpatchMemberProfileHoverCard = this.api.patchComponent<{
+    this.api.patchComponent<{
       memberId: string
       header?: React.ReactNode
     }>(
       'MemberProfileHoverCard',
       (OriginalMemberProfileHoverCard) => (props) => {
         const memberId = props.memberId
-        const trustLevel = instance.trustLevels[memberId]
+        const trustLevel = this.trustLevels[memberId]
 
         const [auditLogs, setAuditLogs] = React.useState<AuditLog[] | null>(
           null
@@ -153,7 +145,7 @@ export default class ShinigamiEyes extends TautPlugin {
           let cancelled = false
           setIsLoading(true)
 
-          instance.fetchAuditLogs(memberId).then((logs) => {
+          this.fetchAuditLogs(memberId).then((logs) => {
             if (!cancelled) {
               console.log('[Taut] Fetched audit logs:', logs)
               setAuditLogs(logs)
@@ -296,14 +288,6 @@ export default class ShinigamiEyes extends TautPlugin {
     this.log('Loaded successfully!')
   }
 
-  stop() {
-    this.unpatchBaseMessageSender()
-    this.unpatchMemberProfileHoverCard()
-    this.api.removeStyle('shinigami-eyes')
-
-    this.log('Stopped')
-  }
-
   // API Fetching
 
   async fetchTrustLevelsFromAPI(): Promise<void> {
@@ -329,7 +313,7 @@ export default class ShinigamiEyes extends TautPlugin {
         const response = await fetch(API_URL, {
           method: 'POST',
           headers: {
-            'authorization': `Bearer ${apiToken}`,
+            authorization: `Bearer ${apiToken}`,
             'content-type': 'application/json',
           },
           body: JSON.stringify({ query }),
@@ -380,7 +364,7 @@ export default class ShinigamiEyes extends TautPlugin {
   }
 
   async initializeTrustLevels(): Promise<void> {
-    this.cache.load()
+    await this.cache.load()
     const cached = this.cache.get('data')
     if (cached) {
       this.trustLevels = cached
@@ -395,12 +379,12 @@ export default class ShinigamiEyes extends TautPlugin {
     await this.fetchTrustLevelsFromAPI()
   }
 
-  getApiToken(): string | undefined {
+  getAPIToken(): string | undefined {
     return this.config.apiToken
   }
 
   async fetchAuditLogs(slackId: string): Promise<AuditLog[] | null> {
-    const apiToken = this.getApiToken()
+    const apiToken = this.getAPIToken()
     if (!apiToken) return null
 
     try {
@@ -409,7 +393,7 @@ export default class ShinigamiEyes extends TautPlugin {
       const userResponse = await fetch(API_URL, {
         method: 'POST',
         headers: {
-          'authorization': `Bearer ${apiToken}`,
+          authorization: `Bearer ${apiToken}`,
           'content-type': 'application/json',
         },
         body: JSON.stringify({ query: userQuery }),
@@ -446,7 +430,7 @@ export default class ShinigamiEyes extends TautPlugin {
       const logsResponse = await fetch(API_URL, {
         method: 'POST',
         headers: {
-          'authorization': `Bearer ${apiToken}`,
+          authorization: `Bearer ${apiToken}`,
           'content-type': 'application/json',
         },
         body: JSON.stringify({ query: logsQuery }),

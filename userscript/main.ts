@@ -1,6 +1,5 @@
 // Taut Userscript main
 
-import type { TautBridge } from '../shared/TautBridge'
 import { userscriptBridge } from './bridge'
 
 declare const unsafeWindow: Window
@@ -61,7 +60,9 @@ if (location.href.startsWith(OPTIONS_URL)) {
       textContent: s.textContent,
       type: s.getAttribute('type'),
     }))
-    doc.querySelectorAll('script').forEach((s) => s.remove())
+    doc.querySelectorAll('script').forEach((s) => {
+      s.remove()
+    })
 
     // Inject taut.js, then Slack's scripts
     const tautScript = doc.createElement('script')
@@ -87,7 +88,7 @@ if (location.href.startsWith(OPTIONS_URL)) {
 
     // Reconstruct the document
     document.open()
-    document.write('<!DOCTYPE html>' + doc.documentElement.outerHTML)
+    document.write(`<!DOCTYPE html>${doc.documentElement.outerHTML}`)
     document.close()
 
     console.log(

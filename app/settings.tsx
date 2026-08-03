@@ -2,31 +2,25 @@
 // Adds a "Taut" tab to Slack's Preferences dialog
 // Shows installed plugins, config info, and credits
 
-import {
-  reactPromise,
-  findComponentPromise,
-  patchComponentPromise,
-} from './slack/react'
+import { setStyle } from './api/css'
+import { type ElementsAPI, elementsAPIPromise } from './api/elements'
+import { type ModalAPI, modalAPIPromise } from './api/modal'
+import { tautVersion } from './bundledData'
+import { initMonaco, type Monaco } from './cdn'
 import type { ConfigStore } from './configStore'
 import type { PluginInfo, PluginManager } from './pluginManager'
-import { initMonaco, type Monaco } from './cdn'
-import { tautVersion } from './bundledData'
+import { patchComponentPromise, reactPromise } from './slack/react'
 
 type MonacoEditorInstance = ReturnType<Monaco['editor']['create']>
 
-type ButtonProps = {
-  type?: 'primary' | 'ghost' | 'outline' | 'danger'
-  size?: 'small' | 'medium' | 'large'
-  icon?: string
-  href?: string
-  htmlType?: 'button' | 'submit' | 'reset'
-}
+let elements: ElementsAPI
+let modal: ModalAPI
 
-let MrkdwnElement: React.ComponentType<{ text: string }>
-let Button: React.ComponentType<
-  ButtonProps &
-    Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, keyof ButtonProps>
->
+const SETTINGS_UI_CSS = `
+  .taut-inline-input {
+    margin-bottom: 0 !important;
+  }
+`
 
 export async function addSettingsTab(
   pluginManager: PluginManager,
@@ -35,24 +29,24 @@ export async function addSettingsTab(
   await reactPromise
 
   void initMonaco()
+  setStyle('settings-ui', SETTINGS_UI_CSS)
 
-  const findComponent = await findComponentPromise
+  const [resolvedElements, resolvedModal] = await Promise.all([
+    elementsAPIPromise,
+    modalAPIPromise,
+  ])
+  elements = resolvedElements
+  modal = resolvedModal
   const patchComponent = await patchComponentPromise
-
-  MrkdwnElement = findComponent<{ text: string }>('MrkdwnElement')
-  Button = findComponent<
-    ButtonProps &
-      Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, keyof ButtonProps>
-  >('Button')
 
   patchComponent<{
     tabs: {
-      'label': React.ReactElement
-      'content': React.ReactElement
-      'svgIcon': {
+      label: React.ReactElement
+      content: React.ReactElement
+      svgIcon: {
         name: string
       }
-      'id'?: string
+      id?: string
       'aria-labelledby'?: string
       'aria-label'?: string
     }[]
@@ -64,15 +58,15 @@ export async function addSettingsTab(
     const tabs = [...props.tabs]
     if (tabs[tabs.length - 1]?.id === 'advanced') {
       tabs.push({
-        'id': 'taut',
-        'label': <>Taut</>,
-        'content': (
+        id: 'taut',
+        label: <>Taut</>,
+        content: (
           <TautSettings
             pluginManager={pluginManager}
             configStore={configStore}
           />
         ),
-        'svgIcon': { name: 'code' },
+        svgIcon: { name: 'code' },
         'aria-label': 'taut',
       })
     }
@@ -103,8 +97,8 @@ export async function addSettingsTab(
 const LOADER_DISPLAY_NAMES: Record<string, string> = {
   'chrome-extension': 'Chrome extension',
   'firefox-extension': 'Firefox extension',
-  'electron': 'Desktop',
-  'userscript': 'Userscript',
+  electron: 'Desktop',
+  userscript: 'Userscript',
 }
 
 function TautSettings({
@@ -128,11 +122,11 @@ function TautSettings({
       >
         Taut Settings
       </div>
-      <MrkdwnElement
+      <elements.MrkdwnElement
         text={`<#C0A057686SF> v${tautVersion} | ${loaderName} v${bridge.loaderVersion} | <https://github.com/jeremy46231/taut|Repository>`}
       />
       {paths && (
-        <MrkdwnElement
+        <elements.MrkdwnElement
           text={`Config Directory: \`${paths.display.tautDir}\``}
         />
       )}
@@ -148,7 +142,7 @@ function TautSettings({
         <UserCssEditor configStore={configStore} />
       </div>
       <hr />
-      <MrkdwnElement text="Created by <@U06UYA5GMB5>, <https://github.com/jeremy46231/taut#credits|credits>" />
+      <elements.MrkdwnElement text="Created by <@U06UYA5GMB5>, <https://github.com/jeremy46231/taut#credits|credits>" />
     </div>
   )
 }
@@ -181,9 +175,11 @@ function ConfigEditor({ configStore }: { configStore: ConfigStore }) {
 
   return (
     <div>
-      {paths && <MrkdwnElement text={`Editing \`${paths.display.config}\``} />}
+      {paths && (
+        <elements.MrkdwnElement text={`Editing \`${paths.display.config}\``} />
+      )}
       {!paths && (
-        <MrkdwnElement
+        <elements.MrkdwnElement
           text={`Editing config (stored in ${LOADER_DISPLAY_NAMES[bridge.loader] ?? bridge.loader} storage)`}
         />
       )}
@@ -204,9 +200,9 @@ function ConfigEditor({ configStore }: { configStore: ConfigStore }) {
           marginTop: '8px',
         }}
       >
-        <Button onClick={handleSave} disabled={!dirty || saving}>
+        <elements.Button onClick={handleSave} disabled={!dirty || saving}>
           {saving ? 'Saving...' : 'Save config.jsonc'}
-        </Button>
+        </elements.Button>
         <div style={{ fontSize: '12px', color: 'var(--sk_foreground_low)' }}>
           {dirty ? 'Unsaved changes' : 'Saved'}
         </div>
@@ -243,9 +239,11 @@ function UserCssEditor({ configStore }: { configStore: ConfigStore }) {
 
   return (
     <div>
-      {paths && <MrkdwnElement text={`Editing \`${paths.display.userCss}\``} />}
+      {paths && (
+        <elements.MrkdwnElement text={`Editing \`${paths.display.userCss}\``} />
+      )}
       {!paths && (
-        <MrkdwnElement
+        <elements.MrkdwnElement
           text={`Editing user.css (stored in ${LOADER_DISPLAY_NAMES[bridge.loader] ?? bridge.loader} storage)`}
         />
       )}
@@ -266,9 +264,9 @@ function UserCssEditor({ configStore }: { configStore: ConfigStore }) {
           marginTop: '8px',
         }}
       >
-        <Button onClick={handleSave} disabled={!dirty || saving}>
+        <elements.Button onClick={handleSave} disabled={!dirty || saving}>
           {saving ? 'Saving...' : 'Save user.css'}
-        </Button>
+        </elements.Button>
         <div style={{ fontSize: '12px', color: 'var(--sk_foreground_low)' }}>
           {dirty ? 'Unsaved changes' : 'Saved'}
         </div>
@@ -379,70 +377,7 @@ function PluginList({
   pluginManager: PluginManager
   configStore: ConfigStore
 }) {
-  const [pluginInfo, setPluginInfo] = React.useState(() =>
-    pluginManager.getPluginInfo()
-  )
-  const [togglingPlugins, setTogglingPlugins] = React.useState<Set<string>>(
-    () => new Set()
-  )
-
-  const pluginInfoRef = React.useRef(pluginInfo)
-  React.useEffect(() => {
-    pluginInfoRef.current = pluginInfo
-  })
-
-  const timeoutsRef = React.useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map()
-  )
-
-  React.useEffect(() => {
-    const onChange = (event: CustomEvent<PluginInfo>) => {
-      const newPluginInfo = event.detail
-      const oldPluginInfo = pluginInfoRef.current
-
-      setTogglingPlugins((prev) => {
-        const next = new Set(prev)
-        for (const id of prev) {
-          const oldP = oldPluginInfo.find((p) => p.id === id)
-          const newP = newPluginInfo.find((p) => p.id === id)
-          if (oldP && newP && oldP.enabled !== newP.enabled) {
-            next.delete(id)
-            const timeout = timeoutsRef.current.get(id)
-            if (timeout) {
-              clearTimeout(timeout)
-              timeoutsRef.current.delete(id)
-            }
-          }
-        }
-        return next
-      })
-      setPluginInfo(newPluginInfo)
-    }
-    pluginManager.on('pluginInfoChanged', onChange)
-    return () => {
-      pluginManager.off('pluginInfoChanged', onChange)
-    }
-  }, [])
-
-  const handleToggle = async (id: string, enabled: boolean) => {
-    setTogglingPlugins((prev) => new Set(prev).add(id))
-    await configStore.setPluginEnabled(id, enabled)
-
-    const existingTimeout = timeoutsRef.current.get(id)
-    if (existingTimeout) {
-      clearTimeout(existingTimeout)
-    }
-
-    const timeout = setTimeout(() => {
-      setTogglingPlugins((prev) => {
-        const next = new Set(prev)
-        next.delete(id)
-        return next
-      })
-      timeoutsRef.current.delete(id)
-    }, 5000)
-    timeoutsRef.current.set(id, timeout)
-  }
+  const pluginInfo = pluginManager.pluginInfoStore.use()
 
   return (
     <>
@@ -452,37 +387,332 @@ function PluginList({
         Installed Plugins:
       </div>
       <ul style={{ marginLeft: '0' }}>
-        {pluginInfo.map((info, index) => (
-          <li key={index} style={{ marginBottom: '12px', listStyle: 'none' }}>
-            <label style={{ display: 'flex', alignItems: 'start' }}>
-              <input
-                type="checkbox"
-                checked={
-                  !togglingPlugins.has(info.id) ? info.enabled : !info.enabled
-                }
-                disabled={togglingPlugins.has(info.id)}
-                onChange={(e) => handleToggle(info.id, e.target.checked)}
-                className="c-input_checkbox"
-                style={{
-                  marginRight: '8px',
-                  marginTop: '5px',
-                }}
-              />
-              <div>
-                <span style={{ fontWeight: 'bold' }}>{info.name}</span>
-                <div>
-                  <MrkdwnElement text={info.description} />
-                </div>
-                <div>
-                  <small>
-                    <MrkdwnElement text={`Authors: ${info.authors}`} />
-                  </small>
-                </div>
-              </div>
-            </label>
-          </li>
+        {pluginInfo.map((info) => (
+          <PluginRow
+            key={info.id}
+            info={info}
+            pluginManager={pluginManager}
+            configStore={configStore}
+          />
         ))}
       </ul>
+      {pluginManager.supportsUserPlugins && (
+        <div style={{ marginTop: '8px' }}>
+          <div style={{ fontWeight: 'bold' }}>Add a plugin</div>
+          <div style={{ marginTop: '8px' }}>
+            <ImportControls pluginManager={pluginManager} />
+          </div>
+        </div>
+      )}
     </>
+  )
+}
+
+function ErrorLine({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{ color: 'var(--sk_raspberry_red, #e01e5a)', fontSize: '12px' }}
+    >
+      {children}
+    </div>
+  )
+}
+
+function PluginRow({
+  info,
+  pluginManager,
+  configStore,
+}: {
+  info: PluginInfo[number]
+  pluginManager: PluginManager
+  configStore: ConfigStore
+}) {
+  const [pendingEnabled, setPendingEnabled] = React.useState<boolean | null>(
+    null
+  )
+  const [toggleError, setToggleError] = React.useState<string | null>(null)
+  const [deleting, setDeleting] = React.useState(false)
+  const [deleteError, setDeleteError] = React.useState<string | null>(null)
+  const [clearing, setClearing] = React.useState<'storage' | 'cache' | null>(
+    null
+  )
+  const [clearError, setClearError] = React.useState<string | null>(null)
+  const pluginData = pluginManager.pluginDataStore.use()
+  const flags = pluginData[info.id]
+
+  React.useEffect(() => {
+    if (pendingEnabled !== null && info.enabled === pendingEnabled) {
+      setPendingEnabled(null)
+    }
+  }, [info.enabled, pendingEnabled])
+
+  // Any in-flight operation on this plugin, prevent race conditions
+  const busy = pendingEnabled !== null || deleting || clearing !== null
+
+  const handleToggle = async (enabled: boolean) => {
+    setPendingEnabled(enabled)
+    setToggleError(null)
+    const success = await configStore.setPluginEnabled(info.id, enabled)
+    if (!success) {
+      setToggleError('Failed to save config change')
+      setPendingEnabled(null)
+    } else {
+      setTimeout(() => {
+        setPendingEnabled((cur) => (cur === enabled ? null : cur))
+      }, 5000)
+    }
+  }
+
+  const handleDelete = async () => {
+    const confirmed = await modal.confirm({
+      title: `Delete ${info.name}?`,
+      body: 'This will permanently delete the user plugin and its stored data.',
+      confirmText: 'Delete',
+      danger: true,
+    })
+    if (!confirmed) return
+
+    setDeleting(true)
+    setDeleteError(null)
+    const result = await pluginManager.deleteUserPlugin(info.id)
+    setDeleting(false)
+    if (!result.ok) setDeleteError(`Failed to delete: ${result.error}`)
+  }
+
+  const handleClear = async (kind: 'storage' | 'cache') => {
+    const label = kind === 'storage' ? 'data' : 'cache'
+    const confirmed = await modal.confirm({
+      title: `Clear ${info.name} ${label}?`,
+      body: `This will permanently clear this plugin's ${label}.`,
+      confirmText: `Clear ${label}`,
+      danger: true,
+    })
+    if (!confirmed) return
+
+    setClearing(kind)
+    setClearError(null)
+    const result = await pluginManager.resetPluginNamespace(info.id, kind)
+    setClearing(null)
+    if (!result.ok) {
+      setClearError(
+        `Failed to clear ${kind === 'storage' ? 'data' : 'cache'}: ${result.error}`
+      )
+    }
+  }
+
+  const openEditor = () => {
+    let handle: ReturnType<ModalAPI['openModal']> = null
+    handle = modal.openModal({
+      title: `Edit ${info.name}`,
+      body: (
+        <ImportControls
+          pluginManager={pluginManager}
+          replacingId={info.id}
+          onDone={() => handle?.close()}
+        />
+      ),
+      submitText: 'Close',
+      showCancelButton: false,
+    })
+  }
+
+  return (
+    <li style={{ marginBottom: '12px', listStyle: 'none' }}>
+      <div style={{ display: 'flex', alignItems: 'start', gap: '8px' }}>
+        <label
+          style={{ display: 'flex', alignItems: 'start', flex: '1 1 auto' }}
+        >
+          <input
+            type="checkbox"
+            checked={pendingEnabled ?? info.enabled}
+            disabled={busy}
+            onChange={(e) => handleToggle(e.target.checked)}
+            className="c-input_checkbox"
+            style={{ marginRight: '8px', marginTop: '5px' }}
+          />
+          <div>
+            <span style={{ fontWeight: 'bold' }}>{info.name}</span>{' '}
+            {info.isUser && (
+              <span
+                style={{
+                  fontWeight: 'normal',
+                  color: 'var(--sk_foreground_low)',
+                }}
+              >
+                ({info.id})
+              </span>
+            )}
+            <div>
+              <elements.MrkdwnElement text={info.description} />
+            </div>
+            <div>
+              <small>
+                <elements.MrkdwnElement text={`Authors: ${info.authors}`} />
+              </small>
+            </div>
+            {toggleError && <ErrorLine>{toggleError}</ErrorLine>}
+            {deleteError && <ErrorLine>{deleteError}</ErrorLine>}
+            {clearError && <ErrorLine>{clearError}</ErrorLine>}
+          </div>
+        </label>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+            <elements.Tooltip tip="Clear cache">
+              <elements.Button
+                size="medium"
+                className="c-button--icon"
+                aria-label="Clear cache"
+                disabled={busy || !flags?.hasCache}
+                onClick={() => handleClear('cache')}
+              >
+                <elements.SvgIcon name="refresh" size={16} inline />
+              </elements.Button>
+            </elements.Tooltip>
+            <elements.Tooltip tip="Clear data">
+              <elements.Button
+                size="medium"
+                type="danger"
+                className="c-button--icon"
+                aria-label="Clear data"
+                disabled={busy || !flags?.hasStorage}
+                onClick={() => handleClear('storage')}
+              >
+                <elements.SvgIcon name="clear" size={16} inline />
+              </elements.Button>
+            </elements.Tooltip>
+
+            {pluginManager.supportsUserPlugins && info.isUser && (
+              <>
+                <elements.Tooltip tip="Edit plugin">
+                  <elements.Button
+                    size="medium"
+                    className="c-button--icon"
+                    aria-label="Edit plugin"
+                    disabled={busy}
+                    onClick={openEditor}
+                  >
+                    <elements.SvgIcon name="edit" size={16} inline />
+                  </elements.Button>
+                </elements.Tooltip>
+                <elements.Tooltip tip="Delete plugin">
+                  <elements.Button
+                    size="medium"
+                    className="c-button--icon"
+                    type="danger"
+                    aria-label="Delete plugin"
+                    disabled={busy}
+                    onClick={handleDelete}
+                  >
+                    <elements.SvgIcon name="trash" size={16} inline />
+                  </elements.Button>
+                </elements.Tooltip>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </li>
+  )
+}
+
+function ImportControls({
+  pluginManager,
+  replacingId,
+  onDone,
+}: {
+  pluginManager: PluginManager
+  replacingId?: string
+  onDone?: () => void
+}) {
+  const bridge = window.TautBridge
+  const [url, setUrl] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const run = async (getCode: () => Promise<string>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      const code = await getCode()
+      const result = await pluginManager.installUserPlugin(code, replacingId)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      setUrl('')
+      onDone?.()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const pickFile = () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.js,text/javascript,application/javascript'
+    input.onchange = () => {
+      const file = input.files?.[0]
+      if (file) run(() => file.text())
+    }
+    input.click()
+  }
+
+  const importUrl = () => {
+    const urlString = url.trim()
+    if (!urlString) return
+    run(async () => {
+      const res = await bridge.fetch(urlString)
+      if (!res.ok) throw new Error(`Failed to fetch (HTTP ${res.status})`)
+      return res.text()
+    })
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <elements.Button size="small" onClick={pickFile} disabled={busy}>
+          Choose file...
+        </elements.Button>
+        <div style={{ flex: '1 1 auto' }}>
+          <elements.FormTextInput
+            size="small"
+            className="taut-inline-input"
+            value={url}
+            placeholder="or paste a URL to a .js file"
+            onChange={setUrl}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') importUrl()
+            }}
+            isDisabled={busy}
+          />
+        </div>
+        <elements.Button
+          size="small"
+          onClick={importUrl}
+          disabled={busy || !url.trim()}
+        >
+          {busy ? 'Importing...' : 'Import URL'}
+        </elements.Button>
+      </div>
+      {error && (
+        <div
+          style={{
+            marginTop: '4px',
+            color: 'var(--sk_raspberry_red, #e01e5a)',
+          }}
+        >
+          {error}
+        </div>
+      )}
+    </div>
   )
 }

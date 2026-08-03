@@ -1,7 +1,7 @@
 // Adds a little cat that chases your cursor around the screen
 // Based on oneko.js by @adryd325 (https://github.com/adryd325/oneko.js)
 
-import { TautPlugin, type TautPluginConfig, type TautAPI } from '$taut'
+import { type TautAPI, TautPlugin, type TautPluginConfig } from '$taut'
 
 const NEKO_FILE =
   'https://raw.githubusercontent.com/adryd325/oneko.js/46b0684f29694eaf3252835003f4d9d0258556e5/oneko.gif'
@@ -89,6 +89,7 @@ type OnekoConfig = TautPluginConfig & {
 }
 
 export default class Oneko extends TautPlugin {
+  static readonly id = 'Oneko'
   static readonly pluginName = 'Oneko'
   static readonly description =
     'A cute cat that chases your cursor around the screen, based on <https://github.com/adryd325/oneko.js|oneko.js>'
@@ -241,7 +242,7 @@ export default class Oneko extends TautPlugin {
   }
 
   onAnimationFrame(timestamp: number): void {
-    if (!this.nekoEl || !this.nekoEl.isConnected) {
+    if (!this.nekoEl?.isConnected) {
       return
     }
 

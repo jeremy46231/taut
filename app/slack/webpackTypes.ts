@@ -45,10 +45,10 @@ export interface WebpackRequire {
     chunkIds?: PropertyKey[],
     execute?: () => T,
     priority?: number
-  ) => T | void
+  ) => T | undefined
 
   /** Returns accessor for default export of a module */
-  n: <T extends object | Function>(module: T) => (() => any) & { a: () => any }
+  n: <T extends object>(module: T) => (() => any) & { a: () => any }
 
   /** Convert a module to a namespace object according to runtime flags */
   t: (module: any, flags: number) => Exports
@@ -58,15 +58,15 @@ export interface WebpackRequire {
 
   f: {
     /** Ensure a JS chunk is loaded, adding its promise to the array */
-    j: (chunkId: PropertyKey, promises: Promise<void[]>) => void
+    j: (chunkId: PropertyKey, promises: Promise<undefined[]>) => void
     /** Ensure a CSS chunk is loaded, adding its promise to the array */
-    miniCss: (chunkId: PropertyKey, promises: Promise<void[]>) => void
+    miniCss: (chunkId: PropertyKey, promises: Promise<undefined[]>) => void
     /** Prefetch additional chunks after this chunk is loaded */
-    prefetch?: (chunkId: PropertyKey, promises: Promise<void[]>) => void
+    prefetch?: (chunkId: PropertyKey, promises: Promise<undefined[]>) => void
   }
 
   /** Ensure JS chunk is loaded, returns a promise */
-  e: (chunkId: PropertyKey) => Promise<void[]>
+  e: (chunkId: PropertyKey) => Promise<undefined[]>
 
   /** Get URL of JS chunk */
   u: (chunkId: PropertyKey) => string | undefined

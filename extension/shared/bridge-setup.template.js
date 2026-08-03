@@ -8,75 +8,50 @@
   let msgId = 0
 
   /**
-   * @template T
-   * @param {string} key
-   * @param {T} fallback
-   * @returns {Promise<T>}
+   * @template {import('./rpc').RpcMethod} M
+   * @param {M} method
+   * @param {import('./rpc').RpcArgs<M>} args
+   * @returns {Promise<import('./rpc').RpcResult<M>>}
    */
-  function storageGet(key, fallback) {
-    return new Promise((resolve) => {
+  function call(method, args) {
+    return new Promise((resolve, reject) => {
       const id = ++msgId
       const handler = /** @type {(e: MessageEvent) => void} */ (
         (e) => {
-          if (
-            !e.data?.__taut ||
-            e.data.type !== 'storage:response' ||
-            e.data.id !== id
-          )
-            return
+          const msg = e.data
+          if (!msg?.__taut || msg.kind !== 'rpc:result' || msg.id !== id) return
           window.removeEventListener('message', handler)
-          resolve(e.data.value ?? fallback)
+          if (msg.ok) resolve(msg.value)
+          else reject(new Error(msg.error))
         }
       )
       window.addEventListener('message', handler)
-      window.postMessage({ __taut: true, type: 'storage:get', id, key })
+      window.postMessage(
+        /** @type {import('./rpc').RpcRequest} */ ({
+          __taut: true,
+          kind: 'rpc',
+          id,
+          method,
+          args,
+        })
+      )
     })
   }
 
-  /**
-   * @param {string} key
-   * @param {unknown} value
-   * @returns {Promise<void>}
-   */
-  function storageSet(key, value) {
-    return /** @type {Promise<void>} */ (
-      new Promise((resolve) => {
-        const id = ++msgId
-        const handler = /** @type {(e: MessageEvent) => void} */ (
-          (e) => {
-            if (
-              !e.data?.__taut ||
-              e.data.type !== 'storage:response' ||
-              e.data.id !== id
-            )
-              return
-            window.removeEventListener('message', handler)
-            resolve()
-          }
-        )
-        window.addEventListener('message', handler)
-        window.postMessage({
-          __taut: true,
-          type: 'storage:set',
-          id,
-          key,
-          value,
-        })
-      })
-    )
-  }
-
-  const lastWritten = new Map()
   const configTextCallbacks = new Set()
   const userCssCallbacks = new Set()
+  const userPluginCallbacks = new Set()
 
   window.addEventListener('message', (e) => {
-    if (!e.data?.__taut || e.data.type !== 'storage:changed') return
-    const { key, newValue } = e.data
-    if (lastWritten.get(key) === newValue) {
-      lastWritten.delete(key)
+    const msg = e.data
+    if (!msg?.__taut || msg.kind !== 'event') return
+    if (msg.name === 'userPlugin.changed') {
+      const { id, code } = msg.payload
+      for (const cb of userPluginCallbacks) cb(id, code)
       return
     }
+    if (msg.name !== 'storage.changed') return
+    const { key, newValue } = msg.payload
     if (key === CONFIG_KEY) for (const cb of configTextCallbacks) cb(newValue)
     if (key === CSS_KEY) for (const cb of userCssCallbacks) cb(newValue)
   })
@@ -88,23 +63,50 @@
         '__TAUT_LOADER__'
       ),
     loaderVersion: '__TAUT_LOADER_VERSION__',
-    bridgeVersion: 1,
+    bridgeVersion: 3,
     PATHS: null,
+
+    cookies: {
+      get: (details) => call('cookieGet', [details]).catch(() => null),
+      getAll: (details) => call('cookieGetAll', [details]).catch(() => []),
+      set: (cookie) => call('cookieSet', [cookie]).catch(() => false),
+      remove: (details) => call('cookieRemove', [details]).catch(() => false),
+    },
+
+    readSecret: (key) => call('readSecret', [key]).catch(() => null),
+    writeSecret: (key, value) =>
+      call('writeSecret', [key, value]).catch(() => false),
+
+    userPlugins: {
+      list: () => call('listUserPlugins', []).catch(() => []),
+      read: (id) => call('readUserPlugin', [id]).catch(() => null),
+      write: (id, code) =>
+        call('writeUserPlugin', [id, code]).catch(() => false),
+      delete: (id) => call('deleteUserPlugin', [id]).catch(() => false),
+      onChange(cb) {
+        userPluginCallbacks.add(cb)
+        return () => userPluginCallbacks.delete(cb)
+      },
+    },
+
+    blobStore(namespace) {
+      return {
+        list: () => call('blobList', [namespace]),
+        read: (key) => call('blobRead', [namespace, key]),
+        write: (key, value) =>
+          call('blobWrite', [namespace, key, value]).catch(() => false),
+        delete: (key) =>
+          call('blobDelete', [namespace, key]).catch(() => false),
+        clear: () => call('blobClear', [namespace]).catch(() => false),
+      }
+    },
 
     async start() {},
 
-    async readConfigText() {
-      return storageGet(CONFIG_KEY, '')
-    },
+    readConfigText: () => call('readConfigText', []),
 
-    async writeConfigText(text) {
-      try {
-        lastWritten.set(CONFIG_KEY, text)
-        await storageSet(CONFIG_KEY, text)
-        return true
-      } catch {
-        return false
-      }
+    writeConfigText(text) {
+      return call('writeConfigText', [text]).catch(() => false)
     },
 
     onConfigTextChange(cb) {
@@ -112,18 +114,10 @@
       return () => configTextCallbacks.delete(cb)
     },
 
-    async readUserCss() {
-      return storageGet(CSS_KEY, '')
-    },
+    readUserCss: () => call('readUserCss', []),
 
-    async writeUserCss(text) {
-      try {
-        lastWritten.set(CSS_KEY, text)
-        await storageSet(CSS_KEY, text)
-        return true
-      } catch {
-        return false
-      }
+    writeUserCss(text) {
+      return call('writeUserCss', [text]).catch(() => false)
     },
 
     onUserCssChange(cb) {
@@ -138,8 +132,7 @@
           : input instanceof URL
             ? input.href
             : input.url
-      const serialInit =
-        /** @type {{ method?: string, body?: string, headers?: Record<string, string> }} */ ({})
+      const serialInit = /** @type {import('./rpc').SerialFetchInit} */ ({})
       if (init?.method) serialInit.method = init.method
       if (init?.body && typeof init.body === 'string')
         serialInit.body = init.body
@@ -156,34 +149,14 @@
         }
         serialInit.headers = headers
       }
-      return new Promise((resolve, reject) => {
-        const id = ++msgId
-        const handler = /** @type {(e: MessageEvent) => void} */ (
-          (e) => {
-            if (
-              !e.data?.__taut ||
-              e.data.type !== 'fetch:response' ||
-              e.data.id !== id
-            )
-              return
-            window.removeEventListener('message', handler)
-            const { status, statusText, headers, body, error } = e.data
-            if (error) {
-              reject(new TypeError(error))
-              return
-            }
-            resolve(new Response(body, { status, statusText, headers }))
-          }
-        )
-        window.addEventListener('message', handler)
-        window.postMessage({
-          __taut: true,
-          type: 'fetch:request',
-          id,
-          url,
-          init: serialInit,
-        })
-      })
+      return call('fetch', [url, serialInit]).then(
+        (r) =>
+          new Response(r.body, {
+            status: r.status,
+            statusText: r.statusText,
+            headers: r.headers,
+          })
+      )
     },
 
     warnOutdated() {

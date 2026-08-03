@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
+
 // Builds distributable extension packages from the sources in extension/
 
-import path from 'path'
-import { rm, mkdir, readFile } from 'fs/promises'
-import prettier from 'prettier'
+import { mkdir, readFile, rm } from 'node:fs/promises'
+import path from 'node:path'
 import { zipSync } from 'fflate'
 
 if (!('Bun' in globalThis)) {
@@ -17,6 +17,8 @@ const DIST = path.join(ROOT, 'dist')
 const OUT_ROOT = path.join(DIST, 'extension')
 const TAUT_JS = path.join(DIST, 'taut.debug.js') // embedded builds use the debug version
 const BRIDGE_TEMPLATE = path.join(EXT_SRC, 'shared', 'bridge-setup.template.js')
+const ICONS_DIR = path.join(ROOT, 'assets', 'icons')
+const ICON_SIZES = [16, 32, 48, 128] as const
 
 const TAUT_VERSION: string = (
   await Bun.file(path.join(ROOT, 'package.json')).json()
@@ -60,6 +62,12 @@ for (const browser of BROWSERS) {
 
     entries['bridge-setup.js'] = enc.encode(bridgeSetup)
 
+    for (const size of ICON_SIZES) {
+      entries[`icons/icon-${size}.png`] = new Uint8Array(
+        await Bun.file(path.join(ICONS_DIR, `icon-${size}.png`)).arrayBuffer()
+      )
+    }
+
     const substituteOptions = (src: string) =>
       src
         .replace(/__TAUT_EMBEDDED__/g, String(isEmbedded))
@@ -95,10 +103,7 @@ for (const browser of BROWSERS) {
         manifest.web_accessible_resources = [...(war ?? []), 'taut.js']
       }
     }
-    const formatted = await prettier.format(JSON.stringify(manifest), {
-      ...(await prettier.resolveConfig(path.join(srcDir, 'manifest.json'))),
-      filepath: path.join(srcDir, 'manifest.json'),
-    })
+    const formatted = `${JSON.stringify(manifest, null, 2)}\n`
     entries['manifest.json'] = enc.encode(formatted)
 
     for (const file of ['content.js', 'background.js']) {

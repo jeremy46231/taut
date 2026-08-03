@@ -2,8 +2,9 @@
 // Checks loader preconditions then bootstraps
 
 import { bootstrap } from './bootstrap'
+import { normalizeBridge } from './bridgeCompat'
 
-export const MIN_BRIDGE_VERSION = 1
+export const MIN_BRIDGE_VERSION = 2
 
 function main() {
   const global = globalThis as any
@@ -20,7 +21,8 @@ function main() {
   // Precondition 2: CSP must be gone (loader must have removed the meta tag)
   let cspOk = false
   try {
-    // eslint-disable-next-line no-eval
+    // biome-ignore lint/complexity/noCommaOperator: indirect eval is used intentionally
+    // biome-ignore lint/security/noGlobalEval: needed to check if eval is blocked by CSP
     ;(0, eval)('1')
     cspOk = true
   } catch {}
@@ -45,7 +47,8 @@ function main() {
     return
   }
 
-  bootstrap(bridge)
+  const normalizedBridge = normalizeBridge(bridge)
+  bootstrap(normalizedBridge)
 }
 
 main()

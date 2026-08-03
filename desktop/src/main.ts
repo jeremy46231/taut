@@ -1,19 +1,26 @@
 // Taut Desktop Main Process
 // Orchestrates startup: loads prefs, patches electron, sets up session/bridge, loads Slack
 
-import { app, dialog, protocol, BrowserWindow, session } from 'electron'
-import { createRequire } from 'module'
-import path from 'path'
-import { fileURLToPath } from 'url'
+import { createRequire } from 'node:module'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  Notification,
+  protocol,
+  session,
+} from 'electron'
 import {
   installExtension,
   REACT_DEVELOPER_TOOLS,
 } from 'electron-devtools-installer'
-import { findSlackAsar } from './slackFinder.js'
-import { applyPatches, setOpenOptionsWindow } from './patch.js'
-import { setupSession } from './session.js'
 import { setupBridge } from './bridge.js'
-import { loadPrefs, getAppUrl, savePrefs } from './prefs.js'
+import { applyPatches, setOpenOptionsWindow } from './patch.js'
+import { getAppUrl, getNotifPrompted, loadPrefs, savePrefs } from './prefs.js'
+import { setupSession } from './session.js'
+import { findSlackAsar } from './slackFinder.js'
 
 const cjsRequire = createRequire(import.meta.url)
 
@@ -68,6 +75,7 @@ function openOptionsWindow() {
     minimizable: false,
     maximizable: false,
     title: 'Taut Options',
+    icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       preload: optionsPreload,
       contextIsolation: true,
@@ -81,7 +89,23 @@ setOpenOptionsWindow(openOptionsWindow)
 
 applyPatches(slackAsarPath, path.join(__dirname, 'preload.js'))
 
+function requestNotificationPermission() {
+  try {
+    if (!Notification.isSupported()) return
+    if (getNotifPrompted()) return
+    const notification = new Notification({
+      title: 'Taut',
+      body: 'Notifications are enabled! Manage them in System Settings > Notifications.',
+    })
+    notification.show()
+    savePrefs({ notifPrompted: true })
+  } catch (e: any) {
+    console.error('[Taut] Notification permission request failed:', e.message)
+  }
+}
+
 app.whenReady().then(async () => {
+  requestNotificationPermission()
   setupSession(realResourcesPath)
 
   try {
@@ -134,7 +158,7 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[Taut] Unhandled rejection:', reason)
 })
-app.on('before-quit', (e) => {
+app.on('before-quit', (_e) => {
   console.log('[Taut] App quitting (before-quit fired)')
 })
 app.on('window-all-closed', () => {

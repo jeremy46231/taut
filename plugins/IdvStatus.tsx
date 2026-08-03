@@ -2,9 +2,12 @@
 
 import { TautPlugin } from '$taut'
 
+const global = globalThis as any
+
 type IdvStatusType = 'eligible' | 'over_18' | 'unverified' | 'loading'
 
 export default class IdvStatus extends TautPlugin {
+  static readonly id = 'IdvStatus'
   static readonly pluginName = 'IDV Status'
   static readonly description =
     'Shows a red squiggle on users who are not IDV eligible'
@@ -17,21 +20,18 @@ export default class IdvStatus extends TautPlugin {
     }
   `
 
-  private cache = this.api.createCache<IdvStatusType>('idv_status', {
+  private cache = new this.api.Cache<IdvStatusType>('idv_status', {
     ttl: 24 * 60 * 60 * 1000,
     maxSize: 5000,
   })
 
-  private unpatchBaseMessageSender = () => {}
-
-  start(): void {
+  async start() {
     this.log('Starting')
 
-    this.cache.load()
+    await this.cache.load()
+    if (this.api.signal.aborted) return
 
-    const instance = this
-
-    this.unpatchBaseMessageSender = this.api.patchComponent<{
+    this.api.patchComponent<{
       botId?: string
       userId?: string
       className?: string
@@ -44,7 +44,7 @@ export default class IdvStatus extends TautPlugin {
           if (!userId || isBotMessage) return null
           if (!userId.startsWith('U') && !userId.startsWith('W')) return null
           if (userId === 'USLACKBOT') return null
-          return instance.cache.get(userId) ?? 'loading'
+          return this.cache.get(userId) ?? 'loading'
         }
       )
 
@@ -53,8 +53,7 @@ export default class IdvStatus extends TautPlugin {
         if (!userId.startsWith('U') && !userId.startsWith('W')) return
         if (userId === 'USLACKBOT') return
 
-        instance
-          .fetchIdvStatus(userId)
+        this.fetchIdvStatus(userId)
           .then(setIdvStatus)
           .catch(() => {})
       }, [userId, isBotMessage])
@@ -91,18 +90,13 @@ export default class IdvStatus extends TautPlugin {
       `
     )
 
-    // @ts-ignore
-    window.tautIdvClearCache = () => this.cache.clear()
+    global.tautIdvClearCache = () => this.cache.clear()
 
     this.log('IDV Status loaded')
   }
 
   stop(): void {
-    this.unpatchBaseMessageSender()
-    this.api.removeStyle('idv-status')
-
-    // @ts-ignore
-    delete window.tautIdvClearCache
+    delete global.tautIdvClearCache
 
     this.log('Stopped')
   }
@@ -110,7 +104,8 @@ export default class IdvStatus extends TautPlugin {
   async fetchIdvStatus(userId: string): Promise<IdvStatusType> {
     return this.cache.fetch(userId, async () => {
       const response = await fetch(
-        `https://identity.hackclub.com/api/external/check?slack_id=${userId}`
+        `https://identity.hackclub.com/api/external/check?slack_id=${userId}`,
+        { signal: this.api.signal }
       )
       if (!response.ok)
         throw new Error(`HTTP error! status: ${response.status}`)

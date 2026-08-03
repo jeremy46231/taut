@@ -1,8 +1,8 @@
 // Taut Desktop Session Setup
 
-import { readFileSync } from 'fs'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { session } from 'electron'
-import path from 'path'
 
 declare const __TAUT_EMBEDDED__: boolean
 

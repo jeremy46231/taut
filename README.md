@@ -5,17 +5,23 @@ Client mod for Slack :D
 ## Quickstart
 
 - Desktop:
-  - [Windows](https://taut.jer.app/taut-win.exe)
-  - [MacOS](https://taut.jer.app/taut-mac.dmg)
+  - Windows: [x64](https://taut.jer.app/taut-win.exe) /
+    [ARM](https://taut.jer.app/taut-win-arm.exe)
+    - You may need to close Slack before installing
+  - MacOS: [Apple Silicon](https://taut.jer.app/taut-mac.dmg) /
+    [Intel](https://taut.jer.app/taut-mac-x64.dmg)
     - Run before launching:
       `xattr -d com.apple.quarantine /Applications/Taut.app`
-  - [Linux](https://taut.jer.app/taut-linux.AppImage)
+  - Linux: [x64](https://taut.jer.app/taut-linux.AppImage) /
+    [ARM](https://taut.jer.app/taut-linux-arm.AppImage)
   - Runs separately from your normal Slack desktop app!
+  - Cannot run at the same time as normal Slack
 - Userscript:
   - Requires [Tampermonkey](https://tampermonkey.net/#download), no Safari
-  - Set these settings in the Tampermonkey Dashboard > `Settings`
+  - Set these settings in the Tampermonkey dashboard > `Settings`
     - `General` / `Config mode`: `Advanced`
-    - `Security` / `Content Script API`: `UserScripts API Dynamic`
+    - (Chrome / Chromium-based only) `Security` / `Content Script API`: `UserScripts API Dynamic`
+    - (Firefox only) `Experimental` / `Inject Mode`: `Instant`
   - Install the [userscript](https://taut.jer.app/taut.user.js)
 - Browser extension:
   - Chrome / Chromium-based
@@ -82,8 +88,9 @@ of the app bundle inside of it, otherwise it is loaded from
 The project uses [Bun](https://bun.sh) for development (`npm i -g bun` if you
 need it). After installing and building everything (`bun run build`), output
 files will be in [`dist/`](dist/). Desktop (much slower than everything else) is
-built separately with `bun build:desktop [platforms]` (`win` `win-arm` `mac`
-`mac-x64` `linux` `linux-arm`, optional `--embedded`).
+built separately with `bun build:desktop [names...]`, where each name is a
+platform (`win` `win-arm` `mac` `mac-x64` `linux` `linux-arm`, or `all`) and/or
+a variant (`standard` `embedded`), e.g. `bun build:desktop mac win embedded`.
 
 PRs are very welcome! You should join the
 [#taut](https://hackclub.slack.com/archives/C0A057686SF) channel on the
@@ -116,3 +123,10 @@ Other Slack tools from the Hack Club community that may interest you:
 ## License
 
 MIT License
+
+---
+
+<sub>AI use disclaimer: I've used plenty of AI in the creation of this project,
+but all the code is closely reviewed and high-quality. If not for this
+disclaimer, you probably wouldn't be able to tell lol, this is probably the
+project I am most proud of ever making.</sub>

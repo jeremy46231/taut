@@ -1,7 +1,13 @@
 // Taut React Utilities
 // Provides utilities for finding and patching React components
 
-import { findExportPromise, waitForExport, forEachExport } from './webpack'
+import {
+  findExportPromise,
+  findModuleId,
+  forEachExport,
+  getValueSource,
+  waitForExport,
+} from './webpack'
 
 const global = globalThis as any
 
@@ -138,6 +144,16 @@ function getRootFiber(): object | null {
   return (container as any)[key]
 }
 
+export function getFiberFromNode(node: Element): any | null {
+  const key = Object.keys(node).find(
+    (k) =>
+      k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
+  )
+  if (!key) return null
+  return (node as any)[key]
+}
+global.getFiberFromNode = getFiberFromNode
+
 function dirtyMemoizationCache() {
   const rootFiber = getRootFiber()
   if (!rootFiber) return
@@ -178,11 +194,50 @@ function getComponentName(component: any): string | null {
   }
 
   if (typeof component === 'function') {
-    return component.displayName || null
+    return component.displayName || component.name || null
   }
 
   return null
 }
+
+function unwrapComponentLayers(component: any): any[] {
+  const layers: any[] = []
+  let current = component
+  while (current && layers.length < 10) {
+    layers.push(current)
+    if (isOriginalComponentObject(current)) {
+      current = current.originalComponent
+    } else if (typeof current === 'object') {
+      if (current.$$typeof === Symbol.for('react.memo')) {
+        current = current.type
+      } else if (current.$$typeof === Symbol.for('react.forward_ref')) {
+        current = current.render
+      } else {
+        break
+      }
+    } else {
+      break
+    }
+  }
+  return layers
+}
+
+/** Get the source code of a React component, best-effort to get the whole module */
+export function getComponentSource(component: ComponentType): string {
+  if (typeof component === 'string') {
+    throw new Error(`[Taut] "${component}" is a host element, not a component`)
+  }
+  const layers = unwrapComponentLayers(component)
+  for (const layer of layers) {
+    if (findModuleId(layer) !== undefined) return getValueSource(layer)
+  }
+  const innermost = layers[layers.length - 1]
+  if (typeof innermost === 'function') return innermost.toString()
+  throw new Error(`[Taut] Could not find source for component`, {
+    cause: component,
+  })
+}
+global.getComponentSource = getComponentSource
 
 function getDisplayName(component: ComponentType): string {
   if (typeof component === 'string') return component
@@ -282,9 +337,9 @@ function resolveType(type: any, props: any): any {
   // __original opts a single render out of patching
   // the original component object is preferable, because
   // then multiple patches can be applied to the same component
-  const __original = props?.['__original']
+  const __original = props?.__original
   if (__original) {
-    delete props['__original']
+    delete props.__original
     return type
   }
 
@@ -317,7 +372,7 @@ function resolveType(type: any, props: any): any {
   return type
 }
 
-function patchComponent<P = {}>(
+function patchComponent<P = object>(
   matcher:
     | string
     | { displayName?: string; filter?: filter; component?: ComponentType<P> },

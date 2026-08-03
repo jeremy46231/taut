@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
+
 // Builds the Taut userscript
 
-import path from 'path'
-import { readFile, mkdir } from 'fs/promises'
-import { existsSync } from 'fs'
+import { existsSync } from 'node:fs'
+import { mkdir, readFile } from 'node:fs/promises'
+import path from 'node:path'
 
 if (!('Bun' in globalThis)) {
   console.error('This script must be run with Bun.')
@@ -97,7 +98,7 @@ async function build(embedded: boolean) {
   }
 
   const code = await result.outputs[0].text()
-  const userscript = header + '\n' + code
+  const userscript = `${header}\n${code}`
 
   const outFile = path.join(OUT, `taut${suffix}.user.js`)
   await Bun.write(outFile, userscript)

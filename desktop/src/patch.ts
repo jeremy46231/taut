@@ -3,10 +3,10 @@
 // subsequent require('electron') from Slack's code gets our patched versions.
 // Also spoofs the process/app env properties Slack uses to locate its assets.
 
-import { createRequire } from 'module'
-import { readFileSync } from 'fs'
-import { app, ipcMain, shell, Menu } from 'electron'
-import path from 'path'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import path from 'node:path'
+import { app, ipcMain, Menu, shell } from 'electron'
 
 const cjsRequire = createRequire(import.meta.url)
 const NodeModule = cjsRequire('module') as any
@@ -139,12 +139,12 @@ export function applyPatches(slackAsarPath: string, tautPreloadPath: string) {
     }
   }
 
-  app.on = function (event: any, listener: any) {
+  app.on = (event: any, listener: any) => {
     const result = origOn(event, listener)
     if (event === 'open-url') process.nextTick(replayPending)
     return result
   }
-  app.once = function (event: any, listener: any) {
+  app.once = (event: any, listener: any) => {
     const result = origOnce(event, listener)
     if (event === 'open-url') process.nextTick(replayPending)
     return result
