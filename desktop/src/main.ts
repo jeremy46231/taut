@@ -77,6 +77,7 @@ function openOptionsWindow() {
     webPreferences: {
       preload: optionsPreload,
       contextIsolation: true,
+      scrollBounce: true
     },
   })
   win.loadFile(optionsHtml)
