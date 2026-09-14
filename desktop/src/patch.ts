@@ -122,6 +122,7 @@ export function applyPatches(slackAsarPath: string, tautPreloadPath: string) {
           ...opts.webPreferences,
           preload: tautPreloadPath,
           devTools: true,
+          scrollBounce: true
         },
       })
     },
