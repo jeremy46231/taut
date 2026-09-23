@@ -12,7 +12,10 @@ export type SerialFetchResponse = {
   status: number
   statusText: string
   headers: Record<string, string>
+  /** Body decoded as UTF-8 text. Lossy for binary payloads. */
   body: string
+  /** Body as base64-encoded raw bytes (lossless). */
+  bodyBase64: string
 }
 
 export type DesktopRpc = {

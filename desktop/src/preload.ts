@@ -68,7 +68,7 @@ if (isClientPage) {
   contextBridge.exposeInMainWorld('TautBridge', {
     loader: 'electron' as const,
     loaderVersion: __TAUT_LOADER_VERSION__,
-    bridgeVersion: 3,
+    bridgeVersion: 4,
     embedded: __TAUT_EMBEDDED__,
     PATHS: paths,
 
