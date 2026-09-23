@@ -10,6 +10,7 @@ type RawModalHandle = { close: () => void; render: (props: unknown) => void }
 type OpenModalThunk = (opts: {
   element: React.ReactElement
   name?: string
+  isStackable?: boolean
 }) => unknown
 
 export interface OpenModalOptions {
@@ -148,9 +149,9 @@ export const modalAPIPromise = (async () => {
     )
 
     const name = typeof options.title === 'string' ? options.title : 'modal'
-    const handle = store.dispatch(openModalAction({ element, name })) as
-      | RawModalHandle
-      | undefined
+    const handle = store.dispatch(
+      openModalAction({ element, name, isStackable: true })
+    ) as RawModalHandle | undefined
     closeRef.current = () => handle?.close()
 
     return { close: () => handle?.close() }

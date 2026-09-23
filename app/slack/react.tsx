@@ -185,17 +185,7 @@ global.getRenderedComponent = getRenderedComponent
 global.waitForRenderedComponent = waitForRenderedComponent
 global.renderedComponents = renderedComponents
 
-// Fiber Utilities (promise-wrapped)
-
-function getRootFiber(): object | null {
-  const container = document.querySelector('.p-client_container')
-  if (!container) return null
-  const key = Object.keys(container).find((k) =>
-    k.startsWith('__reactContainer$')
-  )
-  if (!key) return null
-  return (container as any)[key]
-}
+// Fiber Utilities
 
 export function getFiberFromNode(node: Element): any | null {
   const key = Object.keys(node).find(
@@ -206,21 +196,6 @@ export function getFiberFromNode(node: Element): any | null {
   return (node as any)[key]
 }
 global.getFiberFromNode = getFiberFromNode
-
-function dirtyMemoizationCache() {
-  const rootFiber = getRootFiber()
-  if (!rootFiber) return
-
-  const poison = (node: any) => {
-    if (!node) return
-    if (node.memoizedProps && typeof node.memoizedProps === 'object') {
-      node.memoizedProps = { ...node.memoizedProps, _poison: 1 }
-    }
-    poison(node.child)
-    poison(node.sibling)
-  }
-  poison(rootFiber)
-}
 
 // Component Patching
 
@@ -260,6 +235,8 @@ function unwrapComponentLayers(component: any): any[] {
     layers.push(current)
     if (isOriginalComponentObject(current)) {
       current = current.originalComponent
+    } else if (wrapperOriginals.has(current)) {
+      current = wrapperOriginals.get(current)
     } else if (typeof current === 'object') {
       if (current.$$typeof === Symbol.for('react.memo')) {
         current = current.type
@@ -306,14 +283,19 @@ export type componentReplacer<P = any> = (
 
 const componentReplacements = new Map<componentMatcher, componentReplacer>()
 
-// components that match no replacers
+// components seen since the last patch change that match no replacer
 let notPatchedCache = new WeakSet<object>()
-// component -> its replaced component
-let resolvedComponentCache = new WeakMap<object, ComponentType>()
 
-function invalidateComponentCaches() {
+// names ever passed to patchComponent, persisted by bootstrap so their
+// wrappers exist before a plugin that patches them has started
+export const patchTargets = new Store<ReadonlySet<string>>(new Set())
+
+export function addPatchTargets(names: Iterable<string>): void {
+  const next = new Set(patchTargets.get())
+  for (const name of names) next.add(name)
+  if (next.size === patchTargets.get().size) return
+  patchTargets.set(next)
   notPatchedCache = new WeakSet<object>()
-  resolvedComponentCache = new WeakMap<object, ComponentType>()
 }
 
 const originalComponentSymbol = Symbol.for('taut.originalComponent')
@@ -418,12 +400,70 @@ function applyReplacerWithCache<P = any>(
   return replaced
 }
 
-// Shared component resolution
-// Given the type/component argument passed to createElement or jsx/jsxs,
-// return the type that should actually be rendered: either the original
-// component (when no replacers match, or when explicitly opting out via
-// __original), or the replacer-transformed component. Results are memoized
-// per component identity so matchers run at most once per type.
+// Component Wrapping
+// A component that matches a replacer, or whose name has ever been patched,
+// gets one permanent wrapper the first time it reaches createElement/jsx. The
+// wrapper renders whatever the replacers currently compose to, so a patch
+// added or removed later re-renders correctly
+
+type wrappedComponent = {
+  Wrapper: React.ComponentType<any>
+  composed: Store<ComponentType>
+}
+// original component -> its wrapper
+const wrappedComponents = new Map<object, wrappedComponent>()
+// wrapper -> original component
+const wrapperOriginals = new WeakMap<object, any>()
+// what wrappers render
+const composedComponents = new WeakSet<object>()
+
+function matchingReplacers(type: ComponentType): componentReplacer[] {
+  return [...componentReplacements.entries()]
+    .filter(([matcher]) => matcher(type))
+    .map(([, replacer]) => replacer)
+}
+
+/** The original wrapped in every matching replacer, or the original itself */
+function composeComponent(type: ComponentType): ComponentType {
+  const original = getOriginalComponentObject(type) as unknown as ComponentType
+  const replacers = matchingReplacers(type)
+  if (replacers.length === 0) return original
+  const composed = replacers.reduce(
+    (current, replacer) => applyReplacerWithCache(replacer, current),
+    original
+  )
+  if (typeof composed === 'object' || typeof composed === 'function') {
+    composedComponents.add(composed)
+  }
+  return composed
+}
+
+function wrapComponent(type: object): wrappedComponent {
+  const composed = new Store<ComponentType>(composeComponent(type as any))
+  function Wrapped(props: any) {
+    const Component = composed.use()
+    return <Component {...props} />
+  }
+  Wrapped.displayName = `Wrapped(${getDisplayName(type as any)})`
+  hoistStatics(Wrapped, type)
+  const entry = { Wrapper: Wrapped, composed }
+  wrappedComponents.set(type, entry)
+  wrapperOriginals.set(Wrapped, type)
+  return entry
+}
+
+/** Bring every wrapper in line with the current replacers */
+function applyPatches() {
+  notPatchedCache = new WeakSet<object>()
+  for (const [type, { composed }] of wrappedComponents) {
+    const next = composeComponent(type as any)
+    if (next !== composed.get()) composed.set(next)
+  }
+}
+
+// Given the type passed to createElement or jsx/jsxs, return the type React
+// should render: the type itself, its wrapper, or the original behind an
+// original-component object
 function resolveType(type: any, props: any): any {
   // __original opts a single render out of patching
   // the original component object is preferable, because
@@ -434,35 +474,26 @@ function resolveType(type: any, props: any): any {
     return type
   }
 
-  // Already an unwrapped original-component marker: render the wrapped target
   if (isOriginalComponentObject(type)) return type.originalComponent
 
-  const cacheable = typeof type === 'object' || typeof type === 'function'
-  if (cacheable && notPatchedCache.has(type)) return type
-  if (cacheable && resolvedComponentCache.has(type)) {
-    return resolvedComponentCache.get(type)
-  }
+  if (type === null || (typeof type !== 'object' && typeof type !== 'function'))
+    return type
+  if (composedComponents.has(type) || notPatchedCache.has(type)) return type
+  const wrapped = wrappedComponents.get(type)
+  if (wrapped) return wrapped.Wrapper
+
   // past the caches, so this is the first time we've seen this component
-  if (cacheable) rememberRendered(type)
+  rememberRendered(type)
 
-  const replacers = [...componentReplacements.entries()]
-    .filter(([matcher]) => matcher(type))
-    .map(([, replacer]) => replacer)
-
-  if (replacers.length > 0) {
-    const originalComponent = getOriginalComponentObject(
-      type
-    ) as unknown as ComponentType
-    const replaced = replacers.reduce(
-      (current, replacer) => applyReplacerWithCache(replacer, current),
-      originalComponent
-    )
-    hoistStatics(replaced, type)
-    if (cacheable) resolvedComponentCache.set(type, replaced)
-    return replaced
+  const name = getComponentName(type)
+  if (
+    (name !== null && patchTargets.get().has(name)) ||
+    matchingReplacers(type).length > 0
+  ) {
+    return wrapComponent(type).Wrapper
   }
 
-  if (cacheable) notPatchedCache.add(type)
+  notPatchedCache.add(type)
   return type
 }
 
@@ -488,14 +519,12 @@ function patchComponent<P = object>(
   }
 
   componentReplacements.set(matcherFunc, replacement)
-
-  invalidateComponentCaches()
-  dirtyMemoizationCache()
+  if (displayName !== undefined) addPatchTargets([displayName])
+  applyPatches()
   console.log(`[Taut] patchComponent: Patched component`, componentReplacements)
   return () => {
     componentReplacements.delete(matcherFunc)
-    invalidateComponentCaches()
-    dirtyMemoizationCache()
+    applyPatches()
     console.log(`[Taut] patchComponent: Unpatched component`)
   }
 }

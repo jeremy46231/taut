@@ -2,7 +2,7 @@ name: Slack version
 
 on:
   schedule:
-    - cron: '22 8 * * 1'
+    - cron: '22 8 * * *'
   workflow_dispatch:
 
 permissions:

@@ -1,6 +1,7 @@
 // Taut Bootstrap
 // Wires up the backend, config store, and starts plugins
 
+import type { BlobStore } from '../shared/TautBridge'
 import { applyPendingSwitch } from './api/accountSwitcher'
 import { setStyle } from './api/css'
 import { installResizeGate } from './api/resize'
@@ -10,8 +11,22 @@ import { bundledPlugins } from './bundledData'
 import { ConfigStore } from './configStore'
 import { PluginManager } from './pluginManager'
 import { addSettingsTab } from './settings'
+import { addPatchTargets, patchTargets } from './slack/react'
 
 const global = globalThis as any
+
+/** Keeps the component names that have ever been patched across sessions */
+async function syncPatchTargets(blob: BlobStore) {
+  patchTargets.subscribe(() => {
+    void blob.write('names', JSON.stringify([...patchTargets.get()]))
+  })
+  try {
+    const raw = await blob.read('names')
+    if (raw) addPatchTargets(JSON.parse(raw))
+  } catch (err) {
+    console.error('[Taut] Failed to load patch targets:', err)
+  }
+}
 
 /**
  * Main entry point for Taut initialization.
@@ -24,6 +39,7 @@ export async function bootstrap(bridge: NormalizedBridge): Promise<void> {
   installResizeGate()
 
   await bridge.start()
+  void syncPatchTargets(bridge.blobStore('patch_targets'))
 
   const configStore = new ConfigStore(bridge)
   await configStore.init()

@@ -38,8 +38,11 @@ Client mod for Slack :D
   - Requires [Tampermonkey](https://tampermonkey.net/#download), no Safari
   - Set these settings in the Tampermonkey dashboard > `Settings`
     - `General` / `Config mode`: `Advanced`
-    - (Chrome / Chromium-based only) `Security` / `Content Script API`: `UserScripts API Dynamic`
-    - (Firefox only) `Experimental` / `Inject Mode`: `Instant`
+    - Chrome / Chromium-based:
+      - `Security` / `Content Script API`: `UserScripts API Dynamic`
+    - Firefox:
+      - `Experimental` / `Inject Mode`: `Instant`
+    - Make sure to hit the correct save button!
   - Install the [userscript](https://taut.jer.app/taut.user.js)
 - Browser extension:
   - Chrome / Chromium-based
