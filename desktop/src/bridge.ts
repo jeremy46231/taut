@@ -211,11 +211,15 @@ export function setupBridge(
             const respHeaders: Record<string, string> = {}
             for (const [k, v] of Object.entries(res.headers))
               respHeaders[k] = Array.isArray(v) ? v.join(', ') : String(v)
+            const buffer = Buffer.concat(chunks)
             resolve({
               status: res.statusCode,
               statusText: res.statusMessage,
               headers: respHeaders,
-              body: Buffer.concat(chunks).toString('utf8'),
+              // UTF-8 text is lossy for binary bodies and only kept for
+              // older app versions; bodyBase64 carries the raw bytes
+              body: buffer.toString('utf8'),
+              bodyBase64: buffer.toString('base64'),
             })
           })
         })

@@ -73,7 +73,16 @@ export type SerialResponse = {
   status: number
   statusText?: string
   headers?: Record<string, string>
+  /**
+   * Body decoded as UTF-8 text. Lossy for binary payloads - prefer
+   * `bodyBase64` when the bridge provides it.
+   */
   body?: string | null
+  /**
+   * Body as base64-encoded raw bytes (lossless). Added in Electron
+   * bridgeVersion 4; older bridges omit it.
+   */
+  bodyBase64?: string | null
 }
 
 export type TautBridge = {

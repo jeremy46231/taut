@@ -18,6 +18,14 @@ const V2_BLOB_PREFIX = 'taut:bridge-v2:blob:'
 /** These statuses must have a null body or the Response constructor throws */
 const NULL_BODY_STATUS = new Set([101, 204, 205, 304])
 
+/** Decode a base64 string into its raw bytes */
+function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
 /**
  * Electron's contextBridge structure-clones, so response must be rebuilt
  */
@@ -29,14 +37,21 @@ function toResponse(result: Response | SerialResponse): Response {
     result.status <= 599
       ? result.status
       : 200
-  return new Response(
-    NULL_BODY_STATUS.has(status) ? null : (result?.body ?? ''),
-    {
-      status,
-      statusText: result?.statusText ?? '',
-      headers: result?.headers ?? {},
+  // Prefer the lossless base64 body when the bridge provides it: the UTF-8
+  // `body` string round-trip mangles binary payloads (e.g. images)
+  let body: BodyInit = result?.body ?? ''
+  if (typeof result?.bodyBase64 === 'string') {
+    try {
+      body = base64ToBytes(result.bodyBase64)
+    } catch {
+      // Fall back to the legacy body if a bridge sends malformed base64
     }
-  )
+  }
+  return new Response(NULL_BODY_STATUS.has(status) ? null : body, {
+    status,
+    statusText: result?.statusText ?? '',
+    headers: result?.headers ?? {},
+  })
 }
 
 function localStorageBlobStore(namespace: string): BlobStore {
@@ -171,3 +186,4 @@ export function normalizeBridge(raw: TautBridge): NormalizedBridge {
     blobStore: localStorageBlobStore,
   }
 }
+
