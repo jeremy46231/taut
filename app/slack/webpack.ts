@@ -256,7 +256,11 @@ function wrapWebpackPush(originalPush: PushFn): PushFn {
 
 // Early Hook Installation
 
-const CHUNK_GLOBAL_NAMES = ['webpackChunkwebapp', 'rspackChunkwebapp']
+const CHUNK_GLOBAL_NAMES = [
+  'webpackChunkwebapp',
+  'rspackChunkwebapp',
+  'rspackChunkGantryV2',
+]
 
 function installWebpackHook(globalName: string) {
   let backingArray: Chunk[] | null = null
