@@ -203,6 +203,17 @@ export function ChangeList({
   )
 }
 
+/** marks an entry the person hadn't seen yet */
+export function NewTag() {
+  return (
+    <span className="taut-changes__tag">
+      <elements.Tag style="informative" isMicro>
+        New
+      </elements.Tag>
+    </span>
+  )
+}
+
 /** what's out of date, one row each with its one action */
 export function UpdateList({
   items,
@@ -296,13 +307,7 @@ export function ChangelogScreen({
           <elements.FieldSet>
             <elements.Legend>
               Taut v{release.version}
-              {unseen.has(release.version) && (
-                <span className="taut-changes__tag">
-                  <elements.Tag style="informative" isMicro>
-                    New
-                  </elements.Tag>
-                </span>
-              )}
+              {unseen.has(release.version) && <NewTag />}
             </elements.Legend>
             <ChangeList
               changes={release.changes}

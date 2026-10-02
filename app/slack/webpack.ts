@@ -248,63 +248,73 @@ function wrapModuleFactory(
 
 type PushFn = (...items: Chunk[]) => number
 
-function wrapWebpackPush(originalPush: PushFn): PushFn {
-  return function wrappedPush(this: any, ...args: Chunk[]): number {
-    for (const chunk of args) {
-      if (!Array.isArray(chunk) || chunk.length < 2) continue
+/** wraps a chunk's module factories in place, and catches `__webpack_require__` from its runtime */
+function wrapChunk(chunk: unknown) {
+  if (!Array.isArray(chunk) || chunk.length < 2) return
+  const [_chunkIds, modules, runtime] = chunk as Chunk
 
-      const [_chunkIds, modules, runtime] = chunk
-
-      if (modules && typeof modules === 'object') {
-        for (const moduleId of Object.keys(modules)) {
-          const factory = modules[moduleId]
-          if (typeof factory === 'function') {
-            modules[moduleId] = wrapModuleFactory(moduleId, factory)
-          }
-        }
-      }
-
-      if (typeof runtime === 'function' && !__webpack_require__) {
-        const originalRuntime = runtime
-        chunk[2] = function wrappedRuntime(require: WebpackRequire) {
-          if (!__webpack_require__) {
-            __webpack_require__ = require
-            global.__webpack_require__ = require
-          }
-          return originalRuntime(require)
-        }
+  if (modules && typeof modules === 'object') {
+    for (const moduleId of Object.keys(modules)) {
+      const factory = modules[moduleId]
+      if (typeof factory === 'function') {
+        modules[moduleId] = wrapModuleFactory(moduleId, factory)
       }
     }
+  }
 
+  if (typeof runtime === 'function' && !__webpack_require__) {
+    chunk[2] = function wrappedRuntime(require: WebpackRequire) {
+      if (!__webpack_require__) {
+        __webpack_require__ = require
+        global.__webpack_require__ = require
+      }
+      return runtime(require)
+    }
+  }
+}
+
+function wrapWebpackPush(originalPush: PushFn): PushFn {
+  return function wrappedPush(this: any, ...args: Chunk[]): number {
+    for (const chunk of args) wrapChunk(chunk)
     return originalPush.apply(this, args)
   }
 }
 
 function installWebpackHook(globalName: string) {
-  let backingArray: Chunk[] | null = null
-  let wrappedPush: PushFn | null = null
+  const wrappedPushes = new WeakMap<PushFn, PushFn>()
+  const queue = new Proxy<Chunk[]>([], {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver)
+      if (
+        key !== 'push' ||
+        typeof value !== 'function' ||
+        value === Array.prototype.push
+      )
+        return value
+      let wrapped = wrappedPushes.get(value)
+      if (!wrapped) {
+        wrapped = wrapWebpackPush(value)
+        wrappedPushes.set(value, wrapped)
+      }
+      return wrapped
+    },
+    defineProperty(target, key, descriptor) {
+      // a chunk pushed before the runtime attached, which it reads back later
+      if (typeof key === 'string' && /^\d+$/.test(key))
+        wrapChunk(descriptor.value)
+      return Reflect.defineProperty(target, key, descriptor)
+    },
+  })
 
   Object.defineProperty(global, globalName, {
     configurable: true,
     enumerable: true,
-    get() {
-      return backingArray
-    },
-    set(arr: Chunk[]) {
-      backingArray = arr
-
-      wrappedPush = wrapWebpackPush(arr.push.bind(arr))
-
-      Object.defineProperty(arr, 'push', {
-        configurable: true,
-        enumerable: false,
-        get() {
-          return wrappedPush
-        },
-        set(newPush: PushFn) {
-          wrappedPush = wrapWebpackPush(newPush)
-        },
-      })
+    get: () => queue,
+    set(value: unknown) {
+      if (value !== queue)
+        console.warn(
+          `[Taut] ${globalName} was replaced, so its chunks aren't patched`
+        )
     },
   })
 }

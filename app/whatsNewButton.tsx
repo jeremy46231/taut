@@ -1,11 +1,17 @@
-import type { Change } from '../shared/changelog'
+import type { Release } from '../shared/changelog'
+import { compareVersions } from '../shared/updates'
 import { setStyle } from './api/css'
 import { type ElementsAPI, elementsAPIPromise } from './api/elements'
 import { tautVersion } from './bundledData'
 import type { ConfigStore } from './configStore'
 import { noticeItems, updateStatus } from './loaderUpdate'
 import type { PluginManager } from './pluginManager'
-import { ChangeList, UpdateList, visibleChanges } from './settings/changelog'
+import {
+  ChangeList,
+  NewTag,
+  UpdateList,
+  visibleChanges,
+} from './settings/changelog'
 import { elements, LinkButton, useConfig } from './settings/common'
 import { openTautSettings, settingsTabReady } from './settings/index'
 import { patchComponentPromise } from './slack/react'
@@ -94,6 +100,11 @@ export function addWhatsNewButton(ctx: Context) {
       font-weight: 700;
       color: var(--dt_color-content-sec);
     }
+    .taut-whats-new-popover__more {
+      /* lines up with the change text, past its 16px icon and 8px gap */
+      padding: 3px 0 3px 24px;
+      line-height: 22px;
+    }
     .taut-whats-new-popover__welcome {
       margin: 0;
       color: var(--dt_color-content-sec);
@@ -180,38 +191,30 @@ function WhatsNewPopover({
   pluginManager: PluginManager
   onClose: () => void
 }) {
-  // what was new when it opened should stick
-  const [{ all, welcome }] = React.useState(() => {
-    const welcome = whatsNew.welcome.get()
-    const unseen = whatsNew.unseen.get()
-    // with nothing new, the latest release, unless there's an update to show
-    const quiet =
-      !unseen.length && !welcome && !noticeItems(updateStatus.get()).length
-    const releases = quiet ? whatsNew.releases.slice(0, 1) : unseen
-    return { all: releases.flatMap((r) => r.changes), welcome }
-  })
-  const changes = visibleChanges(all, pluginManager.pluginInfoStore.use())
+  // what was new when it opened keeps its tag until it closes
+  const [{ unseen, welcomeIsNew }] = React.useState(() => ({
+    unseen: new Set(whatsNew.unseen.get().map((release) => release.version)),
+    welcomeIsNew: whatsNew.welcome.get(),
+  }))
+  const installVersion = whatsNew.installVersion.use()
+  const plugins = pluginManager.pluginInfoStore.use()
   const updates = noticeItems(updateStatus.use())
   const [windowRef] = React.useState(() => new WeakRef(window))
   React.useEffect(() => {
     whatsNew.markSeen()
   }, [whatsNew])
 
-  const sections: [string, Change[]][] = [
-    ['New plugins', changes.filter((c) => c.kind === 'new')],
-    [
-      'Plugin updates',
-      changes.filter(
-        (c) => c.kind === 'plugin' || (c.kind === 'fix' && c.plugin)
-      ),
-    ],
-    [
-      'Taut',
-      changes.filter(
-        (c) => c.kind === 'feature' || (c.kind === 'fix' && !c.plugin)
-      ),
-    ],
-  ]
+  // newest first, with the welcome just above the version this install started on
+  const releases = whatsNew.releases.filter(
+    (release) => visibleChanges(release.changes, plugins).length
+  )
+  const entries: (Release | 'welcome')[] = [...releases]
+  if (installVersion) {
+    const at = releases.findIndex(
+      (release) => compareVersions(release.version, installVersion) <= 0
+    )
+    entries.splice(at === -1 ? releases.length : at, 0, 'welcome')
+  }
   const then = (fn: () => void) => () => {
     onClose()
     fn()
@@ -244,35 +247,57 @@ function WhatsNewPopover({
               <UpdateList items={updates} onAction={onClose} />
             </div>
           )}
-          {welcome && (
-            <div>
-              <div className="taut-whats-new-popover__section">
-                Welcome to Taut
-              </div>
-              <p className="taut-whats-new-popover__welcome">
-                Turn on plugins in{' '}
-                <LinkButton onClick={then(() => openTautSettings())}>
-                  Taut settings
-                </LinkButton>
-                .
-              </p>
-            </div>
-          )}
-          {sections
-            .filter(([, list]) => list.length)
-            .map(([title, list]) => (
-              <div key={title}>
-                <div className="taut-whats-new-popover__section">{title}</div>
+          {entries.slice(0, 5).map((entry) => {
+            if (entry === 'welcome')
+              return (
+                <div key="welcome">
+                  <div className="taut-whats-new-popover__section">
+                    Welcome to Taut
+                    {welcomeIsNew && <NewTag />}
+                  </div>
+                  <p className="taut-whats-new-popover__welcome">
+                    Turn on plugins in{' '}
+                    <LinkButton onClick={then(() => openTautSettings())}>
+                      Taut settings
+                    </LinkButton>
+                    .
+                  </p>
+                </div>
+              )
+            const changes = visibleChanges(entry.changes, plugins)
+            // every new plugin, then the rest up to 6 lines
+            const others = changes.filter((c) => c.kind !== 'new')
+            const room = 6 - (changes.length - others.length)
+            const shown = changes.filter(
+              (c) => c.kind === 'new' || others.indexOf(c) < room
+            )
+            return (
+              <div key={entry.version}>
+                <div className="taut-whats-new-popover__section">
+                  Taut v{entry.version}
+                  {unseen.has(entry.version) && <NewTag />}
+                </div>
                 <ChangeList
-                  changes={list}
+                  changes={shown}
                   pluginManager={pluginManager}
                   onOpenPlugin={(id) =>
                     then(() => openTautSettings({ name: 'plugin', id }))()
                   }
-                  tagNewPlugins={false}
                 />
+                {shown.length < changes.length && (
+                  <div className="taut-whats-new-popover__more">
+                    <LinkButton
+                      onClick={then(() =>
+                        openTautSettings({ name: 'changelog' })
+                      )}
+                    >
+                      and {changes.length - shown.length} more...
+                    </LinkButton>
+                  </div>
+                )}
               </div>
-            ))}
+            )
+          })}
         </div>
         <div className="taut-whats-new-popover__foot">
           <LinkButton

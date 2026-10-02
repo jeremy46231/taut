@@ -544,7 +544,7 @@ const renderWrappers = new WeakSet<object>()
 function resolvingType<
   F extends (type: any, props: any, ...rest: any[]) => any,
 >(render: F): F {
-  if (renderWrappers.has(render)) return render
+  if (typeof render !== 'function' || renderWrappers.has(render)) return render
   const wrapper = ((type: any, props: any, ...rest: any[]) =>
     render(resolveType(type, props), props, ...rest)) as F
   renderWrappers.add(wrapper)
