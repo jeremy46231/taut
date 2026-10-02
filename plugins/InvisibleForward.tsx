@@ -1,4 +1,4 @@
-// Makes Slack links at the start of your messages invisible, like a forwarded message, based on Cyril's userscript
+// Makes Slack links at the start of your messages invisible, like a forwarded message
 
 import { type RichTextElement, TautPlugin } from '$taut'
 
@@ -12,8 +12,8 @@ export default class InvisibleForward extends TautPlugin<
     enabled: false,
   }
   static readonly description =
-    "Makes Slack links at the start of your messages invisible, like a forwarded message, based on <@U07FXPUDYDC><https://greasyfork.org/en/scripts/526439-forward-slack-messages-files-and-later-items-to-channels-and-threads-using-an-invisible-link|'s userscript>"
-  static readonly authors = ['jeremy'] as const
+    'Makes Slack links at the start of your messages invisible, like a forwarded message'
+  static readonly authors = ['jeremy', 'cyril'] as const
 
   start() {
     this.api.onMessageSendBlocks((blocks) =>

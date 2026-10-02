@@ -31,6 +31,7 @@
     "lint": "biome lint .",
     "typecheck": "tsc --noEmit",
     "check": "biome check . && tsc --noEmit && tsc -p server",
+    "readme": "node scripts/readme.ts",
     "fix": "biome check --write . && prettier --write \"**/*.md\" && tsc --noEmit",
     "server:dev": "node scripts/build.ts taut extension userscript versions server && wrangler dev --config server/wrangler.jsonc --var \"VERSIONS:$(cat dist/server-versions.json)\"",
     "server:deploy": "wrangler deploy --config server/wrangler.jsonc --var \"VERSIONS:$(cat dist/server-versions.json)\""
