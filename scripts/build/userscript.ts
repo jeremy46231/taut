@@ -8,8 +8,6 @@ import { renderOptions } from '../lib/options.ts'
 import { DIST, TAUT_JS, USERSCRIPT } from '../lib/paths.ts'
 import { versions } from '../lib/versions.ts'
 
-const OUT = path.join(DIST, 'userscript')
-
 async function buildVariant(variant: Variant, headerRaw: string) {
   const embedded = variant === 'embedded'
   const suffix = variantSuffix(variant)
@@ -50,8 +48,8 @@ async function buildVariant(variant: Variant, headerRaw: string) {
   })
 
   const userscript = `${header}\n${result.outputFiles[0].text}`
-  const outFile = path.join(OUT, `taut${suffix}.user.js`)
-  await mkdir(OUT, { recursive: true })
+  const outFile = path.join(DIST, 'userscript', `taut${suffix}.user.js`)
+  await mkdir(path.dirname(outFile), { recursive: true })
   await writeFile(outFile, userscript)
   console.log(
     `[build-userscript] dist/userscript/${path.basename(outFile)}: ${(Buffer.byteLength(userscript) / 1024).toFixed(1)} KB`

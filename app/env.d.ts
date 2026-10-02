@@ -9,3 +9,11 @@ declare module '*.css' {
 interface RegExpConstructor {
   escape(text: string): string
 }
+
+// chrome 140, firefox 133, not yet in typescript 5.9's lib
+interface Uint8Array {
+  toBase64(): string
+}
+interface Uint8ArrayConstructor {
+  fromBase64(base64: string): Uint8Array<ArrayBuffer>
+}

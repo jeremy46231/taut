@@ -4,6 +4,8 @@ import fs from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { build } from 'esbuild'
+import { readChangelog } from '../lib/changelog.ts'
+import { chromeExtensionId } from '../lib/chromeExtension.ts'
 import {
   APP,
   DIST,
@@ -15,13 +17,10 @@ import {
 import { bundlePlugin } from '../lib/plugin.ts'
 import { versions } from '../lib/versions.ts'
 
-const TAUT_SOURCE_ORIGIN = 'taut:///'
-
-// sources come out relative to the repo root; esbuild also lists synthetic
-// <define:...> entries, which stay as they are
+// sources come out relative to the repo root, esbuild's synthetic <define:...> entries stay as they are
 function rewriteSourcePath(p: string): string {
   if (p.startsWith('<')) return p
-  return TAUT_SOURCE_ORIGIN + p.replace(/^\.\//, '')
+  return `taut:///${p.replace(/^\.\//, '')}`
 }
 
 function rewriteInlineSourcemaps(code: string): string {
@@ -43,7 +42,6 @@ function rewriteInlineSourcemaps(code: string): string {
   })
 }
 
-// Step 1: bundle plugins into a Record<string, string>
 async function bundlePlugins(debug: boolean): Promise<Record<string, string>> {
   const plugins: Record<string, string> = {}
   if (!fs.existsSync(PLUGINS)) return plugins
@@ -60,7 +58,6 @@ async function bundlePlugins(debug: boolean): Promise<Record<string, string>> {
   return plugins
 }
 
-// Step 2: bundle app/main.ts with plugins inlined
 async function bundleApp(
   plugins: Record<string, string>,
   debug: boolean,
@@ -77,9 +74,14 @@ async function bundleApp(
     format: 'iife',
     minify: !debug,
     sourcemap: debug ? 'inline' : false,
+    // scripts/build/versions.ts reads the version of the served bundle here
+    banner: { js: `// Taut v${versions.taut}` },
     define: {
       __TAUT_BUNDLED_PLUGINS__: JSON.stringify(plugins),
       __TAUT_VERSION__: JSON.stringify(versions.taut),
+      __TAUT_CHANGELOG__: JSON.stringify(readChangelog(versions.taut)),
+      // only for app/chromeMigration.ts, remove with it
+      __TAUT_CHROME_EXTENSION_ID__: JSON.stringify(chromeExtensionId()),
       __TAUT_TELEMETRY__: String(telemetry),
       process: 'undefined',
       'import.meta.url': 'self.location.href',
@@ -87,15 +89,12 @@ async function bundleApp(
   })
 
   let code = result.outputFiles[0].text
-  // The app is injected as an inline <script>, which DevTools would
-  // otherwise attribute to the page (app.slack.com). Naming it with a
-  // sourceURL gives the generated script a stable identity under the taut://
-  // tree instead of an anonymous inline entry under Slack.
-  if (debug) code += `\n//# sourceURL=${TAUT_SOURCE_ORIGIN}app.js\n`
+  // an inline <script> would show in DevTools under app.slack.com, the sourceURL puts it in the taut:// tree
+  if (debug) code += `\n//# sourceURL=taut:///app.js\n`
   return code
 }
 
-/** Build one flavor of the bundle. Throws if any plugin or the app fails to compile. */
+/** throws if any plugin or the app fails to compile */
 export async function buildTautBundle(
   debug: boolean,
   { telemetry = true } = {}

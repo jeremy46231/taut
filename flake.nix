@@ -6,62 +6,109 @@
   outputs =
     { self, nixpkgs }:
     let
-      # these lines are rewritten by the release workflow after each desktop release
-      version = "3.0.1";
-      hashes = {
-        x86_64-linux = "sha256-lgh+ds3UCHULB9pV9xGipDGoiIO0XJxXOJQ+V8QB6HI=";
-        aarch64-linux = "sha256-rimJ42MVVmiMcWMR/sVWFcCz5G1TgcmhoqFLg8nEh54=";
+      # the release workflow rewrites this block after each desktop release
+      # begin releases (written by scripts/flake.ts)
+      releases = {
+        x86_64-linux = {
+          version = "3.0.1";
+          file = "taut-linux.AppImage";
+          hash = "sha256-lgh+ds3UCHULB9pV9xGipDGoiIO0XJxXOJQ+V8QB6HI=";
+        };
+        aarch64-linux = {
+          version = "3.0.1";
+          file = "taut-linux-arm.AppImage";
+          hash = "sha256-rimJ42MVVmiMcWMR/sVWFcCz5G1TgcmhoqFLg8nEh54=";
+        };
+        x86_64-darwin = {
+          version = "3.0.1";
+          file = "taut-mac-x64.dmg";
+          hash = "sha256-4By0Duc54gnVCnrTcyJf4mlO6yK8b4TerV7eI/9aB3w=";
+        };
+        aarch64-darwin = {
+          version = "3.0.1";
+          file = "taut-mac.dmg";
+          hash = "sha256-InPnbtWdt3gjSG/JglgkMo0xIbpjUdplJ//PehzbL8Q=";
+        };
       };
-
-      appImages = {
-        x86_64-linux = "taut-linux.AppImage";
-        aarch64-linux = "taut-linux-arm.AppImage";
-      };
+      # end releases
 
       package =
         {
           lib,
           stdenv,
+          stdenvNoCC,
           appimageTools,
           fetchurl,
+          makeWrapper,
+          _7zz,
         }:
 
         let
           system = stdenv.hostPlatform.system;
-          hash = hashes.${system};
-        in
-
-        assert lib.assertMsg (
-          hash != ""
-        ) "flake.nix has no ${system} hash yet";
-
-        let
+          release = releases.${system} or (throw "flake.nix has no ${system} release yet");
           pname = "taut";
+          inherit (release) version;
           src = fetchurl {
-            url = "https://github.com/jeremy46231/taut/releases/download/desktop-v${version}/${appImages.${system}}";
-            inherit hash;
+            url = "https://github.com/jeremy46231/taut/releases/download/desktop-v${version}/${release.file}";
+            inherit (release) hash;
           };
-          contents = appimageTools.extract { inherit pname version src; };
-        in
-        appimageTools.wrapType2 {
-          inherit pname version src;
-
-          extraInstallCommands = ''
-            install -Dm444 ${contents}/taut.desktop $out/share/applications/taut.desktop
-            substituteInPlace $out/share/applications/taut.desktop \
-              --replace-fail 'Exec=AppRun' 'Exec=taut'
-            cp -r ${contents}/usr/share/icons $out/share/icons
-          '';
-
           meta = {
             description = "Client mod for Slack";
             homepage = "https://taut.jer.app";
-            license = lib.licenses.mit;
-            platforms = builtins.attrNames appImages;
+            license = lib.licenses.gpl3Plus;
+            platforms = builtins.attrNames releases;
             mainProgram = "taut";
             sourceProvenance = [ lib.sourceTypes.binaryNativeCode ];
           };
-        };
+        in
+
+        if stdenv.hostPlatform.isDarwin then
+          # the signed and notarized app from the dmg
+          stdenvNoCC.mkDerivation {
+            inherit
+              pname
+              version
+              src
+              meta
+              ;
+            nativeBuildInputs = [
+              _7zz
+              makeWrapper
+            ];
+            sourceRoot = ".";
+            # the volume is named after the version and arch, and the store
+            # can't hold the extended attributes (-sns-)
+            unpackPhase = ''
+              7zz x -sns- -snld "$src" >/dev/null
+              mv ./*/Taut.app Taut.app
+            '';
+            # fixup would strip and rewrite the signed binaries
+            dontFixup = true;
+            installPhase = ''
+              mkdir -p $out/Applications $out/bin
+              cp -R Taut.app $out/Applications/
+              makeWrapper $out/Applications/Taut.app/Contents/MacOS/Taut $out/bin/taut
+            '';
+          }
+        else
+          let
+            contents = appimageTools.extract { inherit pname version src; };
+          in
+          appimageTools.wrapType2 {
+            inherit
+              pname
+              version
+              src
+              meta
+              ;
+
+            extraInstallCommands = ''
+              install -Dm444 ${contents}/taut.desktop $out/share/applications/taut.desktop
+              substituteInPlace $out/share/applications/taut.desktop \
+                --replace-fail 'Exec=AppRun' 'Exec=taut'
+              cp -r ${contents}/usr/share/icons $out/share/icons
+            '';
+          };
 
       forSystem = system: rec {
         taut = nixpkgs.legacyPackages.${system}.callPackage package { };
@@ -69,7 +116,7 @@
       };
     in
     {
-      packages = nixpkgs.lib.genAttrs (builtins.attrNames appImages) forSystem;
+      packages = nixpkgs.lib.genAttrs (nixpkgs.lib.remove "x86_64-darwin" (builtins.attrNames releases)) forSystem;
 
       overlays.default = final: prev: { taut = final.callPackage package { }; };
     };

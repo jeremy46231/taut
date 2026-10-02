@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Taut",
-  "version": "1.4.6",
-  "minimum_chrome_version": "136",
+  "version": "1.5.0",
+  "minimum_chrome_version": "140",
   "description": "Client mod for Slack",
   "author": "Jeremy Woolley",
   "homepage_url": "https://taut.jer.app",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyrwtIB0jQlyNwQeKGDjqDwliKmYtCTeMTZveUt3jNhlJ5q9h4s7JHKO01b20l9nq9cvc8HN/yMYsKBGYfym1f1RA3lCSINV0YppEDtYexvde3iABVoRkYCbaiE7tO7jHJQLPltoArv18Ay1oHizPplvaiBIiVhT8BwrytivMUAHCOShLT1Ju1m5hjPchNhTf2mDU622nS4HNR4guOQqjN9iFBOz4zGJDlVcErGYaKdpjhfKcE90Z9Aup0nkHiWFbeV7v5tVHmL8S/dfFrXk9cRDl6sAQne4jmN/hFDTq78jGHTwbRZhXHc8orsbfGmrut8huIyIUhnHgjFjPrKgd+wIDAQAB",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",

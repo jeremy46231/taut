@@ -8,8 +8,7 @@ import { Unzip, UnzipInflate } from 'fflate'
 import tar from 'tar-stream'
 import xz from 'xz-decompress'
 
-// electron's fs treats every path ending in .asar as an archive to read from,
-// which breaks writing slack's app.asar. original-fs is the unpatched module
+// electron's fs treats any path ending in .asar as an archive, which breaks writing Slack's app.asar, original-fs doesn't
 const cjsRequire = createRequire(import.meta.url)
 const fs: typeof import('node:fs') = cjsRequire(
   process.versions.electron ? 'original-fs' : 'node:fs'
@@ -25,7 +24,7 @@ async function writeEntry(into: string, relative: string, data: Uint8Array) {
   await writeFile(dest, data)
 }
 
-/** Extract the files under `dir` inside a zip into `into` (flattened to `into/<rest>`) */
+/** extracts the files under `dir` in a zip to `into/<rest>` */
 export async function extractZipDir(
   archive: string,
   dir: string,
@@ -65,9 +64,7 @@ export async function extractZipDir(
   await Promise.all(writes)
 }
 
-// a .deb is an ar archive: 8 byte magic, then 60 byte member headers with the
-// name in the first 16 bytes and the decimal size at 48..58, members padded to
-// an even offset
+// a .deb is an ar archive: 8 byte magic, 60 byte headers (name at 0..16, decimal size at 48..58), members padded to even offsets
 async function debDataMember(deb: string) {
   const file = await open(deb)
   try {
@@ -88,7 +85,7 @@ async function debDataMember(deb: string) {
   }
 }
 
-/** Extract the files under `dir` inside a deb's data.tar.xz into `into` */
+/** extracts the files under `dir` in a deb's data.tar.xz to `into` */
 export async function extractDebDir(deb: string, dir: string, into: string) {
   const prefix = withSlash(dir)
   const { start, end } = await debDataMember(deb)

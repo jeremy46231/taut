@@ -1,11 +1,14 @@
-// Taut Desktop Bridge
-// IPC handlers for config/CSS management and fetch relay
+// Taut Desktop Bridge: IPC handlers for config, storage, cookies and fetch
 
-import { promises as fs, watch } from 'node:fs'
+import { type FSWatcher, promises as fs, watch } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { ipcMain, net, safeStorage, session } from 'electron'
+import { dialog, ipcMain, net, safeStorage, session } from 'electron'
+import { writeFileAtomic } from './atomicWrite.js'
+import { readyUpdate, restartToUpdate } from './autoUpdate.js'
+import { getInstall } from './installType.js'
 import type { DesktopRpc } from './rpc'
+import { checkForUpdates } from './updates.js'
 
 export interface BridgeConfig {
   configDir: string
@@ -20,12 +23,23 @@ async function fileExists(p: string) {
   }
 }
 
+// an editor that truncates then writes fires twice, and forwarding the empty read in between resets every plugin
+function settledReader(read: () => Promise<void>) {
+  let timer: NodeJS.Timeout | undefined
+  let running = Promise.resolve()
+  return () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      running = running.then(() => read().catch(() => {}))
+    }, 50)
+  }
+}
+
 export function setupBridge(
   config: BridgeConfig,
   opts: {
     getAppUrl: () => string
     setAppUrl: (url: string) => Promise<void>
-    openOptionsWindow: () => void
   }
 ) {
   ipcMain.handle('taut:get-paths', () => {
@@ -33,7 +47,7 @@ export function setupBridge(
     const dp = (p: string) =>
       p.startsWith(home) ? `~${p.slice(home.length)}` : p
     const tautDir = config.configDir
-    const configFile = path.join(tautDir, 'config.jsonc')
+    const configFile = path.join(tautDir, 'config.json')
     const userCssFile = path.join(tautDir, 'user.css')
     return {
       tautDir,
@@ -51,13 +65,35 @@ export function setupBridge(
     }
   })
 
+  ipcMain.handle('taut:get-install', () => getInstall())
+  ipcMain.handle('taut:get-update-ready', () => readyUpdate())
+  ipcMain.handle('taut:restart-to-update', () => restartToUpdate())
   ipcMain.handle('taut:get-app-url', () => opts.getAppUrl())
   ipcMain.handle('taut:set-app-url', async (_, url: string) => {
     await opts.setAppUrl(url)
   })
-  ipcMain.handle('taut:warn-outdated', () => opts.openOptionsWindow())
+  // the app is newer than this loader supports, see MIN_BRIDGE_VERSION
+  ipcMain.handle('taut:warn-outdated', async () => {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      message: 'This Taut desktop app is too old',
+      detail: 'Slack will load without Taut until you update it.',
+      buttons: ['Check for Updates', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    if (response === 0) await checkForUpdates()
+  })
 
-  const configFile = path.join(config.configDir, 'config.jsonc')
+  const configFile = path.join(config.configDir, 'config.json')
+  // Taut before 3.0 used config.jsonc, the app rewrites its contents
+  const configRenamed = (async () => {
+    const old = path.join(config.configDir, 'config.jsonc')
+    if ((await fileExists(configFile)) || !(await fileExists(old))) return
+    await fs
+      .rename(old, configFile)
+      .catch((err) => console.error('[Taut] Failed to rename config:', err))
+  })()
   const userCssFile = path.join(config.configDir, 'user.css')
   const userPluginsDir = path.join(config.configDir, 'user-plugins')
 
@@ -72,7 +108,6 @@ export function setupBridge(
     id !== '..'
   const userPluginFile = (id: string) => path.join(userPluginsDir, `${id}.js`)
 
-  // Generic blob storage, namespaces/keys are base64url-encoded into the path
   const blobRoot = path.join(config.configDir, 'store')
   const encodeSegment = (s: string) =>
     Buffer.from(s, 'utf8').toString('base64url')
@@ -83,53 +118,60 @@ export function setupBridge(
   const blobKeyFile = (namespace: string, key: string) =>
     path.join(blobNamespaceDir(namespace), `${encodeSegment(key)}.txt`)
 
-  // Config/CSS watchers (set up once at startup)
+  // by webContents id, since every reload calls start() again
+  const senderWatchers = new Map<number, FSWatcher[]>()
   ipcMain.handle('taut:setup-watchers', async (event) => {
     const sender = event.sender
+    const senderId = sender.id
+    const previous = senderWatchers.get(senderId)
+    if (previous) for (const watcher of previous) watcher.close()
+    else
+      sender.once('destroyed', () => {
+        for (const watcher of senderWatchers.get(senderId) ?? [])
+          watcher.close()
+        senderWatchers.delete(senderId)
+      })
+    const watchers: FSWatcher[] = []
+    senderWatchers.set(senderId, watchers)
     try {
       await fs.mkdir(config.configDir, { recursive: true })
       await fs.mkdir(userPluginsDir, { recursive: true })
 
-      // Watch configDir for config.jsonc and user.css changes (inode-based)
-      watch(config.configDir, async (_, filename) => {
-        if (!filename) return
-        if (filename === 'config.jsonc') {
-          try {
-            const text = await fs.readFile(configFile, 'utf8')
-            sender.send('taut:config-text-changed', text)
-          } catch {}
-        } else if (filename === 'user.css') {
-          try {
-            const css = await fs.readFile(userCssFile, 'utf8')
-            sender.send('taut:user-css-changed', css)
-          } catch {}
-        }
+      // watch the dir since a file watch follows the inode and misses editors that replace the file
+      await configRenamed
+      if (senderWatchers.get(senderId) !== watchers) return
+      const readConfig = settledReader(async () => {
+        const text = await fs.readFile(configFile, 'utf8')
+        sender.send('taut:config-text-changed', text)
+      })
+      const readUserCss = settledReader(async () => {
+        const css = await fs.readFile(userCssFile, 'utf8')
+        sender.send('taut:user-css-changed', css)
+      })
+      const configWatcher = watch(config.configDir, (_, filename) => {
+        if (filename === 'config.json') readConfig()
+        else if (filename === 'user.css') readUserCss()
       })
 
-      // Watch user-plugins for added/edited/deleted plugin files
-      const userPluginWatchQueues = new Map<string, Promise<void>>()
-      watch(userPluginsDir, (_, filename) => {
+      const userPluginReaders = new Map<string, () => void>()
+      const userPluginWatcher = watch(userPluginsDir, (_, filename) => {
         if (!filename?.endsWith('.js')) return
         const id = filename.slice(0, -'.js'.length)
         if (!isSafePluginId(id)) return
-        const previous = userPluginWatchQueues.get(id) ?? Promise.resolve()
-        const queued = previous.then(async () => {
-          try {
-            const code = await fs.readFile(userPluginFile(id), 'utf8')
+        let read = userPluginReaders.get(id)
+        if (!read) {
+          read = settledReader(async () => {
+            const code = await fs
+              .readFile(userPluginFile(id), 'utf8')
+              .catch(() => null)
             sender.send('taut:user-plugin-changed', id, code)
-          } catch {
-            // File removed
-            sender.send('taut:user-plugin-changed', id, null)
-          }
-        })
-        userPluginWatchQueues.set(id, queued)
-        queued.finally(() => {
-          if (userPluginWatchQueues.get(id) === queued)
-            userPluginWatchQueues.delete(id)
-        })
+          })
+          userPluginReaders.set(id, read)
+        }
+        read()
       })
+      watchers.push(configWatcher, userPluginWatcher)
 
-      // Send initial user.css if the file already exists
       if (await fileExists(userCssFile)) {
         const css = await fs.readFile(userCssFile, 'utf8')
         sender.send('taut:user-css-changed', css)
@@ -160,12 +202,11 @@ export function setupBridge(
     secrets: Record<string, string>
   ): Promise<boolean> {
     try {
-      await fs.mkdir(config.configDir, { recursive: true })
       const json = JSON.stringify(secrets)
       const data = safeStorage.isEncryptionAvailable()
         ? safeStorage.encryptString(json)
         : Buffer.from(json, 'utf8')
-      await fs.writeFile(secretsFile, data)
+      await writeFileAtomic(secretsFile, data)
       return true
     } catch (e) {
       console.error('[Taut] write-secret failed:', e)
@@ -182,8 +223,7 @@ export function setupBridge(
 
   async function writeTextFile(file: string, text: string): Promise<boolean> {
     try {
-      await fs.mkdir(config.configDir, { recursive: true })
-      await fs.writeFile(file, text, 'utf8')
+      await writeFileAtomic(file, text)
       return true
     } catch {
       return false
@@ -204,22 +244,18 @@ export function setupBridge(
         })
         for (const [k, v] of Object.entries(headers)) req.setHeader(k, v)
         req.on('response', (res) => {
-          /** @type {Buffer[]} */
           const chunks: Buffer[] = []
           res.on('data', (c) => chunks.push(c as Buffer))
           res.on('end', () => {
             const respHeaders: Record<string, string> = {}
             for (const [k, v] of Object.entries(res.headers))
               respHeaders[k] = Array.isArray(v) ? v.join(', ') : String(v)
-            const buffer = Buffer.concat(chunks)
             resolve({
               status: res.statusCode,
               statusText: res.statusMessage,
               headers: respHeaders,
-              // UTF-8 text is lossy for binary bodies and only kept for
-              // older app versions; bodyBase64 carries the raw bytes
-              body: buffer.toString('utf8'),
-              bodyBase64: buffer.toString('base64'),
+              // raw bytes, a UTF-8 string would mangle binary bodies
+              body: Buffer.concat(chunks),
             })
           })
         })
@@ -227,14 +263,26 @@ export function setupBridge(
         if (init.body) req.write(init.body)
         req.end()
       }),
-    readConfigText: () => readTextFile(configFile, ''),
-    writeConfigText: (text) => writeTextFile(configFile, text),
+    readConfigText: async () => {
+      await configRenamed
+      return readTextFile(configFile, '')
+    },
+    writeConfigText: async (text) => {
+      await configRenamed
+      return writeTextFile(configFile, text)
+    },
     readUserCss: () => readTextFile(userCssFile, ''),
     writeUserCss: (text) => writeTextFile(userCssFile, text),
     readSecret: async (key) => (await readSecrets())[key] ?? null,
     writeSecret: async (key, value) => {
       const secrets = await readSecrets()
       secrets[key] = value
+      return writeSecrets(secrets)
+    },
+    deleteSecret: async (key) => {
+      const secrets = await readSecrets()
+      if (!(key in secrets)) return true
+      delete secrets[key]
       return writeSecrets(secrets)
     },
     listUserPlugins: async () => {
@@ -259,8 +307,7 @@ export function setupBridge(
     writeUserPlugin: async (id, code) => {
       if (!isSafePluginId(id)) return false
       try {
-        await fs.mkdir(userPluginsDir, { recursive: true })
-        await fs.writeFile(userPluginFile(id), code, 'utf8')
+        await writeFileAtomic(userPluginFile(id), code)
         return true
       } catch {
         return false
@@ -296,8 +343,7 @@ export function setupBridge(
     },
     blobWrite: async (namespace, key, value) => {
       try {
-        await fs.mkdir(blobNamespaceDir(namespace), { recursive: true })
-        await fs.writeFile(blobKeyFile(namespace, key), value, 'utf8')
+        await writeFileAtomic(blobKeyFile(namespace, key), value)
         return true
       } catch {
         return false

@@ -1,5 +1,96 @@
 // Taut Chrome content script
 
+// the id (and so storage) depended on the load folder before the manifest `key`, app/chromeMigration.ts saved a copy
+
+// migration to the pinned extension id, remove once users have moved to it
+const MIGRATION_DB = 'taut-extension-migration'
+const MIGRATION_CHECKED = 'taut-migration-checked'
+
+/** @returns {Promise<unknown>} the snapshot app/chromeMigration.ts wrote, null if there's none */
+function readMirror() {
+  return new Promise((resolve, reject) => {
+    let missing = false
+    const open = indexedDB.open(MIGRATION_DB)
+    open.onupgradeneeded = () => {
+      // it didn't exist, don't create it
+      missing = true
+      open.transaction?.abort()
+    }
+    open.onerror = () => (missing ? resolve(null) : reject(open.error))
+    open.onsuccess = () => {
+      const db = open.result
+      if (!db.objectStoreNames.contains('snapshot')) {
+        db.close()
+        return resolve(null)
+      }
+      const get = db
+        .transaction('snapshot', 'readonly')
+        .objectStore('snapshot')
+        .get('chrome')
+      get.onsuccess = () => {
+        db.close()
+        resolve(get.result ?? null)
+      }
+      get.onerror = () => {
+        db.close()
+        reject(get.error)
+      }
+    }
+  })
+}
+
+/** @param {unknown} snapshot @returns {Record<string, string>} */
+function snapshotEntries(snapshot) {
+  const { version, entries } = /** @type {any} */ (snapshot ?? {})
+  if (version !== 1 || typeof entries !== 'object' || !entries) return {}
+  /** @type {Record<string, string>} */
+  const valid = {}
+  for (const [key, value] of Object.entries(entries)) {
+    if (typeof value === 'string' && key !== MIGRATION_CHECKED) {
+      valid[key] = value
+    }
+  }
+  return valid
+}
+
+/** runs once per install, whatever the mirror holds then is all it restores */
+async function restoreFromMirror() {
+  const isChecked = async () =>
+    (await chrome.storage.local.get(MIGRATION_CHECKED))[MIGRATION_CHECKED]
+  if (await isChecked()) return
+  // tabs opening together would each restore, and a late one could overwrite what an earlier tab's Taut saved
+  await navigator.locks.request(MIGRATION_DB, async () => {
+    if (await isChecked()) return
+    /** @type {Record<string, string>} */
+    let entries = {}
+    try {
+      entries = snapshotEntries(await readMirror())
+    } catch (e) {
+      console.warn("[Taut] Couldn't read the previous extension's storage:", e)
+    }
+    const existing = await chrome.storage.local.get(null)
+    /** @type {Record<string, string>} */
+    const missing = {}
+    for (const [key, value] of Object.entries(entries)) {
+      if (!(key in existing)) missing[key] = value
+    }
+    try {
+      await chrome.storage.local.set({ ...missing, [MIGRATION_CHECKED]: true })
+      const count = Object.keys(missing).length
+      if (count) {
+        console.log(
+          `[Taut] Restored ${count} storage entries from the previous extension`
+        )
+      }
+    } catch (e) {
+      console.warn('[Taut] Storage restore failed:', e)
+      await chrome.storage.local.set({ [MIGRATION_CHECKED]: true })
+    }
+    // it holds secrets and has done its job, o7
+    indexedDB.deleteDatabase(MIGRATION_DB)
+  })
+}
+
 ;(async () => {
   const DEFAULT_URL = __TAUT_EMBEDDED__
     ? chrome.runtime.getURL('taut.js')
@@ -10,13 +101,15 @@
   document.close()
 
   const [{ tautUrl }, html] = await Promise.all([
-    chrome.storage.local.get({ tautUrl: DEFAULT_URL }),
+    // migration to the pinned extension id, remove once users have moved to it
+    restoreFromMirror()
+      .catch((e) => console.warn('[Taut] Storage restore failed:', e))
+      .then(() => chrome.storage.local.get({ tautUrl: DEFAULT_URL })),
     fetch(location.href).then((r) => r.text()),
   ])
   const doc = new DOMParser().parseFromString(html, 'text/html')
   doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.remove()
 
-  // Collect and remove all script elements
   const scripts = Array.from(doc.querySelectorAll('script')).map((s) => ({
     src: s.src,
     textContent: s.textContent,
@@ -26,7 +119,7 @@
     s.remove()
   })
 
-  // Inject: bridge-setup (sets window.TautBridge), then taut.js, then Slack's scripts
+  // bridge-setup.js defines window.TautBridge, so it goes before taut.js
   const scriptError = (/** @type {string} */ url) =>
     `alert('[Taut] Failed to load a script.\\n\\nURL: ' + ${JSON.stringify(url)} + '\\n\\n${url.includes('://localhost') ? 'Make sure your server is running.' : 'Ask in #taut for help.'}')`
 
@@ -54,9 +147,7 @@
   document.write(`<!DOCTYPE html>${doc.documentElement.outerHTML}`)
   document.close()
 
-  // Connect the bridge to the backend
-  // these event listeners must be set up after the document.write shenanigans above
-
+  // document.open() erases the window's listeners, so these go after it
   window.addEventListener('message', async (event) => {
     if (event.source !== window) return
     const msg = event.data
@@ -68,6 +159,14 @@
         method: msg.method,
         args: msg.args,
       })
+      if (msg.method === 'fetch' && result?.ok)
+        result = {
+          ok: true,
+          value: {
+            ...result.value,
+            body: Uint8Array.fromBase64(result.value.body),
+          },
+        }
     } catch (e) {
       result = { ok: false, error: String(e) }
     }
@@ -79,7 +178,7 @@
     })
   })
 
-  // Forward storage changes (this or another tab) to the page as events
+  // storage changes from this or another tab go to the page as events
   const USER_PLUGIN_PREFIX = 'taut-user-plugin:'
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return

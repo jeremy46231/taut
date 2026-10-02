@@ -1,6 +1,3 @@
-// Reads Slack channels from the redux store, and builds channel objects from a
-// set of known fields
-
 import { getReduxStore } from './redux'
 
 export type SlackChannel = {
@@ -22,7 +19,7 @@ export type SlackChannel = {
   [key: string]: unknown
 }
 
-// Mirror Slack's name logic
+// mirrors Slack's name normalization
 const deburr = (s: string): string =>
   s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
 const lc = (s: string): string => String(s).toLowerCase()

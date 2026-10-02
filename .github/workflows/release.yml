@@ -16,18 +16,15 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   check:
     name: Lint & typecheck
     runs-on: ubuntu-latest
-    outputs:
-      taut: ${{ steps.gate.outputs.taut }}
-      desktop: ${{ steps.gate.outputs.desktop }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -35,29 +32,17 @@ jobs:
       - run: npm ci
       - run: npm run check
 
-      - id: gate
-        run: |
-          BEFORE="${{ github.event.before }}"
-          [[ -z "$BEFORE" || "$BEFORE" =~ ^0+$ ]] && BEFORE="HEAD~1"
-          bumped() { git log "$BEFORE..HEAD" -- "$@" | grep -q .; }
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            taut="${{ inputs.taut }}"
-            desktop="${{ inputs.desktop }}"
-          else
-            taut=$(bumped package.json extension/chrome/manifest.json \
-              extension/firefox/manifest.json userscript/version.json && echo true || echo false)
-            desktop=$(bumped desktop/package.json && echo true || echo false)
-          fi
-          echo "taut=$taut" >> "$GITHUB_OUTPUT"
-          echo "desktop=$desktop" >> "$GITHUB_OUTPUT"
-          cat "$GITHUB_OUTPUT"
-
   release:
     name: Build & release
     needs: check
-    if: needs.check.outputs.taut == 'true' || needs.check.outputs.desktop == 'true'
     runs-on: ubuntu-latest
+    # a newer pending run replaces an older pending one, and its gate picks up the older one's bumps
+    concurrency:
+      group: release
+      cancel-in-progress: false
     outputs:
+      desktop: ${{ steps.gate.outputs.desktop }}
+      publish: ${{ steps.gate.outputs.publish }}
       desktop-tag: ${{ steps.desktop-tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v6
@@ -65,25 +50,33 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/setup-node@v5
-        if: needs.check.outputs.taut == 'true'
         with:
           node-version: 24
           cache: npm
+
+      # version raises since the latest tag's commit, so a release job that failed or never ran leaves its bumps to the next run
+      - id: gate
+        env:
+          FORCE_TAUT: ${{ inputs.taut }}
+          FORCE_DESKTOP: ${{ inputs.desktop }}
+          FORCE_PUBLISH: ${{ github.event_name == 'workflow_dispatch' }}
+        run: node scripts/releaseGate.ts
+
       - run: npm ci
-        if: needs.check.outputs.taut == 'true'
+        if: steps.gate.outputs.publish == 'true'
 
       - name: Build bundle, extensions and userscript
-        if: needs.check.outputs.taut == 'true'
+        if: steps.gate.outputs.taut == 'true'
         run: npm run build
 
       - name: Update rolling releases
+        if: steps.gate.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git tag -f latest && git tag -f repo
-          git push -f origin refs/tags/latest refs/tags/repo
           ensure() {
-            gh release view "$1" >/dev/null 2>&1 || gh release create "$1" --notes "" "${@:4}"
+            gh release view "$1" >/dev/null 2>&1 ||
+              gh release create "$1" --target "$GITHUB_SHA" --notes "" "${@:4}"
             gh release edit "$1" --title "$2" --notes-file "$3" "${@:4}"
           }
           cat > latest.md <<'MD'
@@ -91,20 +84,24 @@ jobs:
 
           - `taut.js` / `taut.debug.js`: the app bundle every loader fetches (`debug` carries sourcemaps)
           - `taut.user.js`: userscript; `taut-chrome.zip` / `taut-firefox.xpi`: browser extensions
-          - `taut-mac*.dmg`, `taut-win*.exe`, `taut-linux*.{AppImage,deb,rpm,pacman}`: desktop installers,
-            with version history in the `desktop-v*` releases
+          - Desktop installers are in the `desktop-v*` releases
 
           Install instructions are in the [README](https://github.com/jeremy46231/taut#quickstart).
           MD
-          cat > repo.md <<'MD'
-          apt and dnf indexes read by https://taut.jer.app/apt and https://taut.jer.app/rpm, see the
-          [README](https://github.com/jeremy46231/taut#quickstart) for more.
-          MD
           ensure latest "Latest build" latest.md --latest --prerelease=false
-          ensure repo "Package repository metadata" repo.md --prerelease
+
+      - name: Attest build provenance
+        if: steps.gate.outputs.taut == 'true'
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/taut.js
+            dist/taut.debug.js
+            dist/userscript/*.user.js
+            dist/extension/*.zip
 
       - name: Publish to latest release
-        if: needs.check.outputs.taut == 'true'
+        if: steps.gate.outputs.taut == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -115,7 +112,7 @@ jobs:
             dist/extension/*.zip
 
       - name: Sign and publish the Firefox extension
-        if: needs.check.outputs.taut == 'true'
+        if: steps.gate.outputs.taut == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
@@ -139,14 +136,16 @@ jobs:
             --channel unlisted \
             --api-key "$AMO_JWT_ISSUER" \
             --api-secret "$AMO_JWT_SECRET" \
-            --artifacts-dir dist/extension/signed
-          mv dist/extension/signed/*.xpi dist/extension/taut-firefox.xpi
+            --artifacts-dir dist/extension/amo
+          mkdir -p dist/extension/signed
+          mv dist/extension/amo/*.xpi dist/extension/signed/taut-firefox.xpi
+          cp dist/extension/taut-firefox-updates.json dist/extension/signed/
           gh release upload latest --clobber \
-            dist/extension/taut-firefox.xpi \
-            dist/extension/taut-firefox-updates.json
+            dist/extension/signed/taut-firefox.xpi \
+            dist/extension/signed/taut-firefox-updates.json
 
       - name: Create desktop release
-        if: needs.check.outputs.desktop == 'true'
+        if: steps.gate.outputs.desktop == 'true'
         id: desktop-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -156,12 +155,47 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 && exit 0
           gh release create "$TAG" --target "$GITHUB_SHA" --latest=false \
             --title "Desktop ${TAG#desktop-}" \
-            --notes "Taut desktop ${TAG#desktop-}. The \`latest\` release always has the newest installers, see the [README](https://github.com/jeremy46231/taut#quickstart) to install."
+            --notes "Taut desktop ${TAG#desktop-}. See the [README](https://github.com/jeremy46231/taut#quickstart) to install, its links always get the newest installers."
+
+      # the app files the `latest` release has, their versions baked into the Worker, desktop releases come from the legs' reports
+      - name: Deploy taut.jer.app
+        if: steps.gate.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::warning::CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID not set"
+            exit 0
+          fi
+          gh release download latest --dir dist --clobber \
+            --pattern taut.js --pattern taut.debug.js
+          gh release download latest --dir dist/userscript --clobber --pattern taut.user.js
+          gh release download latest --dir dist/extension --clobber --pattern taut-chrome.zip
+          gh release download latest --dir dist/extension/signed --clobber \
+            --pattern taut-firefox.xpi --pattern taut-firefox-updates.json ||
+            echo "::warning::could not fetch the signed Firefox files"
+          npm run build -- versions server
+          cat dist/server-versions.json
+          npm run server:deploy
+
+      # last, so if a step above fails the next run's gate still sees these bumps
+      - name: Move the latest tag
+        if: steps.gate.outputs.publish == 'true'
+        run: |
+          git tag -f latest
+          git push -f origin refs/tags/latest
 
   release-desktop:
     name: Desktop (${{ matrix.platforms }})
-    needs: [check, release]
-    if: needs.check.outputs.desktop == 'true'
+    needs: release
+    if: needs.release.outputs.desktop == 'true'
+    # queued, not cancelled: a leg stopped mid-upload leaves a half-published desktop-v release
+    concurrency:
+      group: desktop ${{ matrix.platforms }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
@@ -298,77 +332,125 @@ jobs:
           echo "$REPO_GPG_KEY" | gpg --batch --import
           npm run repo
 
-      - name: Publish desktop to latest release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload latest --clobber dist/desktop/*
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/desktop/*
 
       - name: Publish desktop to ${{ needs.release.outputs.desktop-tag }}
-        id: versioned
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.release.outputs.desktop-tag }}
         run: |
+          set -euo pipefail
           existing="$(gh release view "$TAG" --json assets -q '.assets[].name')"
-          uploaded=""
-          for file in dist/desktop/*; do
-            name="$(basename "$file")"
+          kept=""
+          publish() {
+            local name
+            name="$(basename "$1")"
             if grep -qxF "$name" <<<"$existing"; then
               echo "$name is already published, keeping it"
-              continue
+              kept+="$name"$'\n'
+              return
             fi
-            gh release upload "$TAG" "$file"
-            uploaded="$uploaded $name"
+            if [[ "$name" == *.yml ]]; then
+              # a file kept from an earlier run is another build than this yml
+              # describes (its sha512 would fail every download)
+              local ref stale=""
+              while read -r ref; do
+                if grep -qxF "$ref" <<<"$existing"; then stale="$stale $ref"; fi
+              done < <(sed -nE "s/^ *(- )?(url|path): *['\"]?([^'\"]+)['\"]? *$/\3/p" "$1" | sort -u)
+              if [ -n "$stale" ]; then
+                echo "::warning::not publishing $name, it doesn't describe the published$stale; this platform won't update itself to ${TAG#desktop-v}"
+                return
+              fi
+            fi
+            gh release upload "$TAG" "$1"
+          }
+          # update ymls last, so it's only on the server once all the files it references are
+          for file in dist/desktop/*; do
+            if [[ "$file" != *.yml ]]; then publish "$file"; fi
           done
-          echo "uploaded=$uploaded" >> "$GITHUB_OUTPUT"
+          # the apt and dnf indexes pin their packages by hash, so they need this run's packages
+          if compgen -G 'dist/repo/*' >/dev/null; then
+            if grep -qE '[.](deb|rpm)$' <<<"$kept"; then
+              echo "::warning::not publishing the apt and dnf indexes, $TAG already has other builds of their packages"
+            else
+              for file in dist/repo/*; do publish "$file"; done
+            fi
+          fi
+          for file in dist/desktop/*.yml; do
+            if [ -f "$file" ]; then publish "$file"; fi
+          done
 
-      - name: Pin the AppImages in flake.nix
-        if: contains(steps.versioned.outputs.uploaded, '.AppImage')
+      - name: Report ${{ needs.release.outputs.desktop-tag }} to taut.jer.app
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.release.outputs.desktop-tag }}
-          UPLOADED: ${{ steps.versioned.outputs.uploaded }}
-        run: |
-          pin() {
-            grep -qF " $2 " <<<" $UPLOADED " || return 0
-            hash="sha256-$(openssl dgst -sha256 -binary "dist/desktop/$2" | base64)"
-            sed -i -E "s|^(        $1 = )\"(sha256-[^\"]*)?\";$|\1\"$hash\";|" flake.nix
-            grep -qF "$1 = \"$hash\";" flake.nix
-          }
-          sed -i -E "s|^(      version = )\"[^\"]*\";$|\1\"${TAG#desktop-v}\";|" flake.nix
-          grep -qF "version = \"${TAG#desktop-v}\";" flake.nix
-          pin x86_64-linux taut-linux.AppImage
-          pin aarch64-linux taut-linux-arm.AppImage
-          gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/flake.nix" \
-            -f branch=main \
-            -f message="nix: pin desktop ${TAG#desktop-}" \
-            -f sha="$(gh api "repos/$GITHUB_REPOSITORY/contents/flake.nix?ref=main" -q .sha)" \
-            -f content="$(base64 -w0 flake.nix)"
+        run: node scripts/reportDesktop.ts "${{ needs.release.outputs.desktop-tag }}"
 
+      # the newest mac release taut.jer.app has, which a newer run's leg may already have reported
       - name: Publish the Homebrew cask
         if: contains(matrix.platforms, 'mac')
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           TAP: ${{ github.repository_owner }}/homebrew-taut
-          TAG: ${{ needs.release.outputs.desktop-tag }}
         run: |
-          if [ -z "$TAP_TOKEN" ]; then
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
             echo "::warning::HOMEBREW_TAP_TOKEN not set; skipping the Homebrew cask."
             exit 0
           fi
-          gh release download "$TAG" --pattern 'taut-mac*.dmg' --dir published
-          node scripts/cask.ts published/taut-mac.dmg published/taut-mac-x64.dmg > taut.rb
+          node scripts/cask.ts > taut.rb
           cat taut.rb
-          export GH_TOKEN="$TAP_TOKEN"
-          sha="$(gh api "repos/$TAP/contents/Casks/taut.rb" 2>/dev/null | jq -r '.sha // empty')"
+          version="$(sed -nE 's/^  version "([^"]+)"$/\1/p' taut.rb)"
+          sha="$( (gh api "repos/$TAP/contents/Casks/taut.rb" 2>/dev/null || true) | jq -r '.sha // empty')"
           gh api -X PUT "repos/$TAP/contents/Casks/taut.rb" \
-            -f message="taut ${TAG#desktop-v}" \
+            -f message="taut $version" \
             -f content="$(base64 < taut.rb | tr -d '\n')" \
             ${sha:+-f sha="$sha"}
 
-      - name: Publish repository metadata
-        if: hashFiles('dist/repo/*') != ''
+  # after every leg, pins each platform's newest installer that taut.jer.app has
+  pin-flake:
+    name: Pin flake.nix
+    needs: [release, release-desktop]
+    if: >-
+      !cancelled() && needs.release.result == 'success' &&
+      needs.release.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pin-flake
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      # rewrites main's flake.nix through the contents API, see scripts/flake.ts
+      # (a GITHUB_TOKEN commit doesn't retrigger this workflow, no inf loops)
+      - name: Pin the desktop releases in flake.nix
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload repo --clobber dist/repo/*
+        run: |
+          set -euo pipefail
+          # the sha makes the PUT fail if a push changed flake.nix since the GET
+          for attempt in 1 2 3; do
+            gh api "repos/$GITHUB_REPOSITORY/contents/flake.nix?ref=main" > flake.json
+            jq -r .content flake.json | base64 -d > flake.main.nix
+            cp flake.main.nix flake.nix
+            node scripts/flake.ts flake.nix
+            if cmp -s flake.main.nix flake.nix; then
+              echo "flake.nix already pins the published releases"
+              exit 0
+            fi
+            versions="$(grep -oE 'version = "[^"]+"' flake.nix | cut -d'"' -f2 | sort -uV | paste -sd' ' -)"
+            if gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/flake.nix" \
+              -f branch=main \
+              -f message="nix: pin desktop $versions" \
+              -f sha="$(jq -r .sha flake.json)" \
+              -f content="$(base64 -w0 flake.nix)"; then
+              exit 0
+            fi
+            echo "::warning::pinning flake.nix failed (attempt $attempt), retrying against main's newest copy"
+          done
+          exit 1

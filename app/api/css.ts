@@ -1,11 +1,7 @@
-// Taut CSS Utilities
-// Injects stylesheets, optionally keyed so later calls can replace them
-
 import { updateMonacoTheme } from '../cdn'
 import { childWindowDocuments, onChildWindow } from '../slack/childWindows'
 
-// One entry per injected stylesheet, with the element it rendered into each
-// document that gets a copy. Weak so closed child windows can be collected
+// weak so closed child windows' documents can be collected
 type Sheet = {
   css: string
   key?: string
@@ -27,7 +23,7 @@ function render(sheet: Sheet, doc: Document) {
     doc.head.appendChild(element)
     sheet.elements.set(doc, element)
   }
-  element.textContent = sheet.css
+  if (element.textContent !== sheet.css) element.textContent = sheet.css
 }
 
 function drop(sheet: Sheet) {
@@ -40,7 +36,7 @@ function drop(sheet: Sheet) {
   updateMonacoTheme()
 }
 
-/** Add a stylesheet, returning a disposer. A `key` replaces, a null `css` drops */
+/** returns a disposer, a `key` replaces that key's sheet and a null `css` drops it */
 export function setStyle(css: string | null, key?: string): () => void {
   let sheet = key === undefined ? undefined : keyed.get(key)
 

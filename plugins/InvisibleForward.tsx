@@ -1,109 +1,72 @@
-// Makes Slack links at the start of your messages invisible
+// Makes Slack links at the start of your messages invisible, like a forwarded message, based on Cyril's userscript
 
-import { type Delta, TautPlugin } from '$taut'
+import { type RichTextElement, TautPlugin } from '$taut'
 
 export default class InvisibleForward extends TautPlugin<
   typeof InvisibleForward
 > {
   static readonly id = 'InvisibleForward'
   static readonly pluginName = 'Invisible Forward'
+  static readonly category = 'messageBox'
   static readonly defaultConfig = {
     enabled: false,
   }
   static readonly description =
     "Makes Slack links at the start of your messages invisible, like a forwarded message, based on <@U07FXPUDYDC><https://greasyfork.org/en/scripts/526439-forward-slack-messages-files-and-later-items-to-channels-and-threads-using-an-invisible-link|'s userscript>"
-  static readonly authors = '<@U06UYA5GMB5>'
+  static readonly authors = ['jeremy'] as const
 
   start() {
-    this.api.onMessageSendDelta((delta) => this.transformInvisibleLinks(delta))
+    this.api.onMessageSendBlocks((blocks) =>
+      this.api.blocks.mapRichTextSections(blocks, (elements, run) =>
+        run.index === 0 &&
+        run.container === 'rich_text_section' &&
+        run.parent === 'rich_text'
+          ? this.hideLeadingLinks(elements)
+          : elements
+      )
+    )
     this.log('Started')
   }
 
-  /**
-   * Scans the Delta for leading Slack URLs, replaces them with invisible characters,
-   * and trims surrounding whitespace.
-   */
-  protected transformInvisibleLinks(delta: Delta): Delta {
-    const ops = delta.ops
-    const hiddenLinks: string[] = []
+  protected hideLeadingLinks(elements: RichTextElement[]): RichTextElement[] {
+    const hidden: string[] = []
     let i = 0
-
-    // Iterate through ops to find leading Slack links
-    for (; i < ops.length; i++) {
-      const op = ops[i]
-
-      // If op is not text, break immediately
-      if ('insert' in op && typeof op.insert !== 'string') {
-        break
-      }
-
-      // Link
-      if (op.attributes?.link) {
-        const url = op.attributes.link
-        if (
-          // Must be a Slack URL and the display text must match the URL
-          (this.isSlackUrl(url) && 'insert' in op && op.insert === url) ||
-          // A single dot is also hidden, even if not a Slack URL
-          ('insert' in op && op.insert === '.')
-        ) {
-          hiddenLinks.push(url)
+    for (; i < elements.length; i++) {
+      const element = elements[i]
+      if (element.type === 'link' && !element.style) {
+        const url = String(element.url ?? '')
+        // markdown mode's links arrive with shortened text marked truncated
+        const bare =
+          !element.text || element.text === url || !!element.truncated
+        // a link written as "." is hidden even if it isn't a Slack URL
+        if ((bare && this.isSlackUrl(url)) || element.text === '.') {
+          hidden.push(url)
           continue
         }
-        // Not a link to convert, stop processing
         break
       }
-
-      // Whitespace
-      // Consume whitespace if it appears between links or after the last link
       if (
-        !op.attributes &&
-        'insert' in op &&
-        typeof op.insert === 'string' &&
-        op.insert.trim() === ''
+        element.type === 'text' &&
+        !element.style &&
+        element.text?.trim() === ''
       ) {
         continue
       }
-
-      // Normal, stop processing
       break
     }
+    if (hidden.length === 0) return elements
 
-    // If no links were found to hide, return original delta (optimization)
-    if (hiddenLinks.length === 0) return delta
-
-    const newOps: Delta['ops'] = []
-    hiddenLinks.forEach((link) => {
-      newOps.push({
-        insert: '\u2060',
-        attributes: { link },
-      })
-    })
-
-    // Handle the remaining content
-    if (i < ops.length) {
-      // Special handling for the op where we stopped: trim the leading whitespace
-      const currentOp = ops[i]
-      if ('insert' in currentOp && typeof currentOp.insert === 'string') {
-        const trimmedText = currentOp.insert.trimStart()
-
-        if (trimmedText.length > 0) {
-          newOps.push({
-            ...currentOp,
-            insert: trimmedText,
-          })
-        }
-      } else {
-        newOps.push(currentOp)
-      }
-
-      // Append the rest of the ops
-      if (i + 1 < ops.length) {
-        newOps.push(...ops.slice(i + 1))
-      }
+    const rest = elements.slice(i)
+    const first = rest[0]
+    if (first?.type === 'text' && typeof first.text === 'string') {
+      const trimmed = first.text.trimStart()
+      if (trimmed) rest[0] = { ...first, text: trimmed }
+      else rest.shift()
     }
-
-    delta.ops = newOps
-    return delta
+    return [
+      ...hidden.map((url) => ({ type: 'link', url, text: '\u2060' })),
+      ...rest,
+    ]
   }
 
   protected isSlackUrl(url: string): boolean {

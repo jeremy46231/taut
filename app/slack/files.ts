@@ -1,13 +1,8 @@
-// Uploads files through Slack's own uploader
-
 import { dispatchThunk } from './redux'
 
 type PendingUpload = { uploadPromise?: Promise<{ fileIds?: string[] }> }
 
-/**
- * upload as the current user, resolving with the file id. Slack reads fields
- * like `subtype` off the File and sets `id` on it, so pass a real one
- */
+/** resolves with the file id, pass a real File since Slack reads `subtype` off it and sets `id` on it */
 export async function uploadFile(file: File): Promise<string> {
   const pending: PendingUpload = await dispatchThunk(
     'addAndUploadPendingFile',

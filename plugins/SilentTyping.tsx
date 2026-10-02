@@ -1,105 +1,65 @@
-// Suppresses typing indicators so others can't see when you're typing
+// Adds a button to hide your typing indicator, so others can't see when you're typing
 
 import { TautPlugin } from '$taut'
+
+type TypingArgs = { channelId?: string } | undefined
 
 export default class SilentTyping extends TautPlugin<typeof SilentTyping> {
   static readonly id = 'SilentTyping'
   static readonly pluginName = 'Silent Typing'
   static readonly description =
-    "Adds a button to suppress typing indicators so others can't see when you're typing"
-  static readonly authors = '<@U06UYA5GMB5>, <@U080A3QP42C>, <@U01D9DWGEB0>'
+    "Adds a button to hide your typing indicator, so others can't see when you're typing"
+  static readonly authors = ['jeremy', 'rowan', 'ani'] as const
+  static readonly category = 'messageBox'
   static readonly defaultConfig = {
     enabled: false,
   }
 
-  private static readonly STORAGE_KEY = 'taut_silent_typing_suppressed'
-  private suppressed = false
-  private readonly listeners = new Set<(v: boolean) => void>()
+  /** channel ids with typing hidden */
+  private readonly silenced = new this.api.Store<ReadonlySet<string>>(new Set())
 
-  private setSuppressed(v: boolean) {
-    this.suppressed = v
-    localStorage.setItem(SilentTyping.STORAGE_KEY, String(v))
-    for (const l of this.listeners) l(v)
+  private toggle(channelId: string) {
+    this.silenced.update((silenced) => {
+      const next = new Set(silenced)
+      if (!next.delete(channelId)) next.add(channelId)
+      return next
+    })
   }
 
   start(): void {
-    this.suppressed = localStorage.getItem(SilentTyping.STORAGE_KEY) === 'true'
+    try {
+      // the global toggle an older version stored
+      localStorage.removeItem('taut_silent_typing_suppressed')
+    } catch {}
 
-    for (const name of ['MessagePaneInput', 'InputContainer'] as const) {
-      this.api.patchComponent<{
-        currentUserStartedTyping?: () => void
-        currentUserEndedTyping?: () => void
-      }>(name, (Original) => (props) => {
-        const [isSuppressed, setIsSuppressed] = React.useState(this.suppressed)
-
-        React.useEffect(() => {
-          this.listeners.add(setIsSuppressed)
-          return () => {
-            this.listeners.delete(setIsSuppressed)
-          }
-        }, [])
-
-        if (isSuppressed) {
-          props = {
-            ...props,
-            currentUserStartedTyping: () => {},
-            currentUserEndedTyping: () => {},
-          }
-        }
-
-        return <Original {...props} />
-      })
-    }
-
-    const Tooltip = this.api.elements.Tooltip
-    const IconButtonBase = this.api.elements.IconButtonBase
-    const SvgIcon = this.api.elements.SvgIcon
-
-    this.api.patchComponent<{ children?: React.ReactNode }>(
-      'TextyButtonOverflow',
-      (Original) => (props) => {
-        const [isSuppressed, setIsSuppressed] = React.useState(this.suppressed)
-
-        React.useEffect(() => {
-          this.listeners.add(setIsSuppressed)
-          return () => {
-            this.listeners.delete(setIsSuppressed)
-          }
-        }, [])
-
-        const label = isSuppressed
-          ? 'Allow typing notifications'
-          : 'Suppress typing notifications'
-
-        const children = React.Children.toArray(props.children)
-        children.push(
-          <Tooltip
-            key="taut-silent-typing"
-            tip={label}
-            position="top"
-            offsetY={-7}
-            delay={500}
-            zIndex="above_fs"
-          >
-            <IconButtonBase
-              className="c-wysiwyg_container__button"
-              aria-pressed={String(isSuppressed)}
-              aria-label={label}
-              onClick={() => this.setSuppressed(!isSuppressed)}
-              tabIndex={-1}
-              size="smedium"
-            >
-              <SvgIcon
-                name={isSuppressed ? 'notifications-off' : 'notifications'}
-                size={18}
-              />
-            </IconButtonBase>
-          </Tooltip>
-        )
-
-        return <Original {...props}>{children}</Original>
-      }
+    // every composer reports typing through this thunk
+    this.api.redux.patchThunk(
+      'currentUserStartedTyping',
+      (original) =>
+        (args: TypingArgs, ...rest: unknown[]) =>
+          args?.channelId && this.silenced.get().has(args.channelId)
+            ? () => {}
+            : original(args, ...rest)
     )
+
+    this.api.composer.addButton({
+      id: 'taut-silent-typing',
+      placement: 'end',
+      render: ({ channelId }) => {
+        const silenced = this.silenced.use().has(channelId)
+        return {
+          icon: silenced ? 'notifications-off' : 'notifications',
+          label: silenced
+            ? 'Show typing in this chat'
+            : 'Hide typing in this chat',
+          tooltip: silenced
+            ? 'Show typing in this chat (hidden until you reload)'
+            : 'Hide typing in this chat until you reload',
+          pressed: silenced,
+          onClick: () => this.toggle(channelId),
+        }
+      },
+    })
 
     this.log('Started')
   }

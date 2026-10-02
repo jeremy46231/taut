@@ -1,9 +1,6 @@
-// Strips tracking parameters from URLs before sending messages
-// Rules sourced from the ClearURLs project: https://github.com/ClearURLs/Rules
+// Strips tracking parameters from links you paste into messages (rules from ClearURLs)
 
-import { type Delta, TautPlugin } from '$taut'
-
-const URL_RE = /(https?:\/\/[^\s<|]+[^<.,:;"'>)|\]\s])/g
+import { opt, TautPlugin } from '$taut'
 
 type RulesData = {
   providers: Record<
@@ -24,32 +21,38 @@ type Provider = {
   exceptions: RegExp[]
 }
 
+type ExtraRule = { param: RegExp; host: RegExp | null }
+
+const wildcard = (value: string) => RegExp.escape(value).replace(/\\\*/g, '.*?')
+
 export default class ClearURLs extends TautPlugin<typeof ClearURLs> {
   static readonly id = 'ClearURLs'
   static readonly pluginName = 'Clear URLs'
   static readonly description =
-    'Strips tracking parameters from URLs before sending messages (rules from <https://github.com/ClearURLs/Rules|ClearURLs>)'
-  static readonly authors = '<@U06UYA5GMB5>, <@U080A3QP42C>'
+    'Strips tracking parameters from links you paste into messages (rules from <https://github.com/ClearURLs/Rules|ClearURLs>)'
+  static readonly authors = ['jeremy', 'rowan'] as const
+  static readonly category = 'messageBox'
   static readonly defaultConfig = {
     enabled: false,
+    extraRules: opt.list(
+      [],
+      'More parameters to strip: "param" or "param@host", "*" matches anything (e.g. "ref_*", "si@*.youtube.com")'
+    ),
   }
 
   private cache = new this.api.Cache<RulesData>('clearurls_rules', {
     ttl: 7 * 24 * 60 * 60 * 1000,
   })
   private providers: Provider[] = []
+  private extraRules: ExtraRule[] = []
 
   async start() {
+    this.extraRules = this.compileExtraRules(this.config.extraRules)
     await this.cache.load()
     if (this.api.signal.aborted) return
     this.loadRules()
-    this.api.onMessageSendDelta((delta) => this.cleanDelta(delta))
+    this.api.composer.addLinkTransform((url) => this.cleanURL(url))
     this.log('Started')
-  }
-
-  stop(): void {
-    this.providers = []
-    this.log('Stopped')
   }
 
   private async loadRules(): Promise<void> {
@@ -101,6 +104,30 @@ export default class ClearURLs extends TautPlugin<typeof ClearURLs> {
     })
   }
 
+  private compileExtraRules(rules: string[]): ExtraRule[] {
+    return rules.flatMap((rule) => {
+      const [param, host] = rule.trim().split('@')
+      if (!param) return []
+      try {
+        return [
+          {
+            param: new RegExp(`^${wildcard(param)}$`, 'i'),
+            // "*.example.com" also matches example.com itself
+            host: host
+              ? new RegExp(
+                  `^(www\\.)?${RegExp.escape(host.toLowerCase())
+                    .replace(/^\\\*\\\./, '(.+\\.)?')
+                    .replace(/\\\*/g, '.*?')}$`
+                )
+              : null,
+          },
+        ]
+      } catch {
+        return []
+      }
+    })
+  }
+
   private cleanURL(url: string): string {
     let parsed: URL
     try {
@@ -108,62 +135,40 @@ export default class ClearURLs extends TautPlugin<typeof ClearURLs> {
     } catch {
       return url
     }
+    let removed = 0
+    const dropParams = (matches: (key: string) => boolean) => {
+      const doomed: string[] = []
+      parsed.searchParams.forEach((_, key) => {
+        if (matches(key)) doomed.push(key)
+      })
+      for (const key of doomed) parsed.searchParams.delete(key)
+      removed += doomed.length
+    }
 
     for (const provider of this.providers) {
       if (!provider.urlPattern.test(parsed.href)) continue
       if (provider.exceptions.some((ex) => ex.test(parsed.href))) continue
 
-      const toDelete: string[] = []
-      parsed.searchParams.forEach((_, key) => {
-        if (provider.rules.some((r) => r.test(key))) toDelete.push(key)
-      })
-      for (const key of toDelete) parsed.searchParams.delete(key)
+      dropParams((key) => provider.rules.some((r) => r.test(key)))
 
       for (const raw of provider.rawRules) {
         const next = parsed.href.replace(raw, '')
-        if (next !== parsed.href) {
-          try {
-            parsed = new URL(next)
-          } catch {}
-        }
+        if (next === parsed.href) continue
+        try {
+          parsed = new URL(next)
+          removed++
+        } catch {}
       }
     }
 
-    return parsed.toString()
-  }
+    const host = parsed.hostname.toLowerCase()
+    dropParams((key) =>
+      this.extraRules.some(
+        (rule) => rule.param.test(key) && (!rule.host || rule.host.test(host))
+      )
+    )
 
-  private cleanDelta(delta: Delta): Delta {
-    if (this.providers.length === 0) return delta
-
-    for (let i = 0; i < delta.ops.length; i++) {
-      const op = delta.ops[i]
-      if (!('insert' in op)) continue
-
-      let insert = op.insert
-      let attributes = op.attributes
-      let opChanged = false
-
-      if (attributes?.link && typeof attributes.link === 'string') {
-        const cleanedLink = this.cleanURL(attributes.link)
-        if (cleanedLink !== attributes.link) {
-          if (typeof insert === 'string' && insert === attributes.link)
-            insert = cleanedLink
-          attributes = { ...attributes, link: cleanedLink }
-          opChanged = true
-        }
-      }
-
-      if (typeof insert === 'string' && /https?:\/\//.test(insert)) {
-        const cleanedText = insert.replace(URL_RE, (url) => this.cleanURL(url))
-        if (cleanedText !== insert) {
-          insert = cleanedText
-          opChanged = true
-        }
-      }
-
-      if (opChanged) delta.ops[i] = { ...op, insert, attributes }
-    }
-
-    return delta
+    // URL reserializes, so keep the original by default
+    return removed ? parsed.toString() : url
   }
 }

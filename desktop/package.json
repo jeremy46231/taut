@@ -1,10 +1,10 @@
 {
   "name": "taut-desktop",
-  "version": "3.0.1",
-  "slackVersion": "4.52.155",
+  "version": "3.1.0",
+  "slackVersion": "4.52.162",
   "description": "Client mod for Slack",
   "homepage": "https://taut.jer.app",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "author": {
     "name": "Jeremy Woolley",
     "email": "taut@jeremywoolley.com",

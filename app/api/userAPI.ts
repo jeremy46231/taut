@@ -1,13 +1,9 @@
-// Calls the Slack Web API as the current user
-
 import { getActiveTeam } from '../slack/localConfig'
 
 export interface UserAPIOptions {
   rateLimitRetries?: number
   signal?: AbortSignal
 }
-
-const DEFAULT_RETRY_AFTER_SEC = 2
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -24,10 +20,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   })
 }
 
-/**
- * Call a Slack Web API method as the currently-active user and return the
- * parsed JSON response. Throws if the request or the API call fails
- */
+/** calls a Slack Web API method as the active user, throws if the request or the call fails */
 export async function userAPI<T = any>(
   method: string,
   params: Record<string, string | Blob> = {},
@@ -59,8 +52,7 @@ export async function userAPI<T = any>(
       if (attempt >= retries)
         throw new Error(`[Taut] userAPI ${method} rate limited`)
       const header = Number(res.headers.get('Retry-After'))
-      const waitSec =
-        Number.isFinite(header) && header > 0 ? header : DEFAULT_RETRY_AFTER_SEC
+      const waitSec = Number.isFinite(header) && header > 0 ? header : 2
       await sleep(waitSec * 1000, options.signal)
       continue
     }
@@ -73,12 +65,12 @@ export async function userAPI<T = any>(
       throw new Error(`[Taut] userAPI ${method} HTTP ${res.status}: ${text}`)
     }
 
-    const json = (await res.json()) as { ok: boolean } & Record<string, any>
+    const json = (await res.json()) as { ok: boolean } & Record<string, unknown>
     if (!json.ok) {
       // careful, slack maybe gives rate limits with a 200 and an error string
       if (json.error === 'ratelimited' || json.error === 'rate_limited') {
         if (attempt < retries) {
-          await sleep(DEFAULT_RETRY_AFTER_SEC * 1000, options.signal)
+          await sleep(2000, options.signal)
           continue
         }
       }

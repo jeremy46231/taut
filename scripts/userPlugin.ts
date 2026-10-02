@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Builds one user plugin into the format accepted by Taut's import UI.
+// Builds one user plugin into the format Taut's import UI accepts
 
 import { writeFile } from 'node:fs/promises'
 import path from 'node:path'

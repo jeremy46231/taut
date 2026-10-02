@@ -1,5 +1,3 @@
-// Reactive values a plugin publishes for other plugins to read
-
 import { Store } from '../store'
 
 export type SharedStoreHandle<T> = Pick<
@@ -52,7 +50,7 @@ export class SharedStore<T> {
     this.set(updater(this.get()))
   }
 
-  /** Reactively read the current value inside a component */
+  /** reactively read the value inside a component */
   use = (): T => this.slot.use() as T
 
   dispose = (): void => {
@@ -62,14 +60,12 @@ export class SharedStore<T> {
   }
 }
 
-export function bindSharedStore(
-  pluginId: string,
-  track: (cleanup: () => void) => void
-) {
+export function bindSharedStore(pluginId: string, signal: AbortSignal) {
   return class BoundSharedStore<T> extends SharedStore<T> {
     constructor(key: string, initial: T) {
       super(`${pluginId}:${key}`, initial)
-      track(this.dispose)
+      if (signal.aborted) this.dispose()
+      else signal.addEventListener('abort', this.dispose, { once: true })
     }
   }
 }

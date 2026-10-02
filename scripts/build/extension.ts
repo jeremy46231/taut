@@ -11,34 +11,28 @@ import { ASSETS, DIST, EXTENSION, TAUT_DEBUG_JS } from '../lib/paths.ts'
 import { versions } from '../lib/versions.ts'
 
 const OUT_ROOT = path.join(DIST, 'extension')
-const BRIDGE_TEMPLATE = path.join(
-  EXTENSION,
-  'shared',
-  'bridge-setup.template.js'
-)
-const ICONS_DIR = path.join(ASSETS, 'icons')
-const ICON_SIZES = [16, 32, 48, 128] as const
-
-const BROWSERS = [
-  {
-    browser: 'chrome',
-    loaderName: 'chrome-extension',
-    loaderVersion: versions.chromeExtension,
-    zipExt: 'zip',
-  },
-  {
-    browser: 'firefox',
-    loaderName: 'firefox-extension',
-    loaderVersion: versions.firefoxExtension,
-    zipExt: 'xpi',
-  },
-] as const
 
 export async function buildExtension(variants: Variant[]) {
-  const bridgeTemplate = await readFile(BRIDGE_TEMPLATE, 'utf8')
+  const bridgeTemplate = await readFile(
+    path.join(EXTENSION, 'shared', 'bridge-setup.template.js'),
+    'utf8'
+  )
   const enc = new TextEncoder()
 
-  for (const { browser, loaderName, loaderVersion, zipExt } of BROWSERS) {
+  for (const { browser, loaderName, loaderVersion, zipExt } of [
+    {
+      browser: 'chrome',
+      loaderName: 'chrome-extension',
+      loaderVersion: versions.chromeExtension,
+      zipExt: 'zip',
+    },
+    {
+      browser: 'firefox',
+      loaderName: 'firefox-extension',
+      loaderVersion: versions.firefoxExtension,
+      zipExt: 'xpi',
+    },
+  ] as const) {
     const srcDir = path.join(EXTENSION, browser)
 
     for (const variant of variants) {
@@ -57,9 +51,9 @@ export async function buildExtension(variants: Variant[]) {
       const entries: Record<string, Uint8Array> = {}
       entries['bridge-setup.js'] = enc.encode(bridgeSetup)
 
-      for (const size of ICON_SIZES) {
+      for (const size of [16, 32, 48, 128]) {
         entries[`icons/icon-${size}.png`] = await readFile(
-          path.join(ICONS_DIR, `icon-${size}.png`)
+          path.join(ASSETS, 'icons', `icon-${size}.png`)
         )
       }
 

@@ -1,13 +1,11 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import os from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { slackNativeArches } from './nativeModules.js'
+import { slackArch } from './slackDownload.js'
 
-const STORE_PACKAGE_PREFIX = 'com.tinyspeck.slackdesktop_'
-
-// msix slack lives in WindowsApps, which a non-elevated process can't list
-// but can read from at a known exact path!
-// so find the installed package's full name in the registry, then build the exact asar path
+// a non-elevated process can't list WindowsApps but can read an exact path in it, so get msix Slack's full package name from the registry
 function findStorePackageFullNames(prefix: string): string[] {
   const key =
     'HKCU\\Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages'
@@ -51,7 +49,7 @@ export function findInstalledSlackAsar(): string | undefined {
       break
 
     case 'win32': {
-      // Classic NSIS installer: %LOCALAPPDATA%\slack\app-x.y.z\resources\app.asar
+      // classic nsis installer: %LOCALAPPDATA%\slack\app-x.y.z\resources\app.asar
       const localAppData =
         process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
       const slackDir = join(localAppData, 'slack')
@@ -67,7 +65,7 @@ export function findInstalledSlackAsar(): string | undefined {
       const programFiles = process.env.ProgramFiles ?? process.env.ProgramW6432
       if (programFiles) {
         for (const fullName of findStorePackageFullNames(
-          STORE_PACKAGE_PREFIX
+          'com.tinyspeck.slackdesktop_'
         )) {
           candidates.push(
             join(
@@ -100,5 +98,8 @@ export function findInstalledSlackAsar(): string | undefined {
       break
   }
 
-  return candidates.find((p) => existsSync(p))
+  // e.g. an x64 Slack beside an arm64 Taut, whose natives won't load
+  const fits = (asar: string) =>
+    slackNativeArches(dirname(asar))?.has(slackArch()) ?? true
+  return candidates.find((p) => existsSync(p) && fits(p))
 }

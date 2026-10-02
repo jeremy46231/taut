@@ -1,9 +1,17 @@
-// Taut CDN Dependencies
-// Loads Monaco editor and jsonc-parser from CDN at runtime
+// Taut CDN Dependencies: Monaco and jsonc-parser, loaded from jsDelivr at runtime
 
 export type Monaco = typeof import('monaco-editor')
-export type JsoncParser = typeof import('jsonc-parser')
-export type JsoncNode = import('jsonc-parser').Node
+
+/** the part of jsonc-parser used, see `initJsonc` */
+export type ParseError = { error: number; offset: number; length: number }
+type JsoncParser = {
+  parse(
+    text: string,
+    errors: ParseError[],
+    options: { allowTrailingComma: boolean }
+  ): unknown
+  printParseErrorCode(code: number): string
+}
 
 const global = globalThis as any
 
@@ -26,11 +34,13 @@ let monacoPromise: Promise<Monaco> | null = null
 let jsoncPromise: Promise<JsoncParser> | null = null
 
 export function initJsonc(): Promise<JsoncParser> {
-  if (jsoncPromise) return jsoncPromise
-  jsoncPromise = (async () => {
-    // @ts-expect-error
-    return await import('https://cdn.jsdelivr.net/npm/jsonc-parser@3.3.1/+esm')
-  })()
+  jsoncPromise ??= import(
+    // @ts-expect-error a URL, not a module TypeScript can resolve
+    'https://cdn.jsdelivr.net/npm/jsonc-parser@3.3.1/+esm'
+  ).catch((err: unknown) => {
+    jsoncPromise = null
+    throw err
+  })
   return jsoncPromise
 }
 
@@ -63,13 +73,34 @@ const initTheme = () => {
   })
 }
 
+/** JSON schemas, keyed by the uri of the model they validate */
+const jsonSchemas = new Map<string, object>()
+
+function applyJsonSchemas() {
+  monaco?.json.jsonDefaults.setDiagnosticsOptions({
+    validate: true,
+    allowComments: false,
+    trailingCommas: 'error',
+    schemas: [...jsonSchemas].map(([uri, schema]) => ({
+      uri: `${uri}#schema`,
+      fileMatch: [uri],
+      schema,
+    })),
+  })
+}
+
+/** validates the JSON model at `uri` against `schema` (null removes it) */
+export function setJsonSchema(uri: string, schema: object | null) {
+  if (schema) jsonSchemas.set(uri, schema)
+  else jsonSchemas.delete(uri)
+  applyJsonSchemas()
+}
+
 export function initMonaco(): Promise<Monaco> {
   if (monacoPromise) return monacoPromise
 
   monacoPromise = (async () => {
-    // Electron's sandboxed renderer exposes a sealed `process` with no `env`, which causes
-    // Monaco's platform.ts to throw accessing process.env['CI']. Monaco checks globalThis.vscode.process
-    // first, so we make a fake one lol
+    // Monaco reads process.env['CI'], which throws on the sealed `process` of Electron's sandbox, but checks vscode.process first
     if (
       typeof global.process !== 'undefined' &&
       global.process.env === undefined
@@ -86,11 +117,7 @@ export function initMonaco(): Promise<Monaco> {
     const _monaco = await monacoLoader.init()
     monaco = _monaco
 
-    _monaco.json.jsonDefaults.setDiagnosticsOptions({
-      validate: true,
-      allowComments: true,
-      trailingCommas: 'ignore',
-    })
+    applyJsonSchemas()
 
     _monaco.css.cssDefaults.setOptions({
       validate: true,

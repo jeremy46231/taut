@@ -7,13 +7,11 @@ import { session } from 'electron'
 declare const __TAUT_EMBEDDED__: boolean
 
 export function setupSession(realResourcesPath: string) {
-  // disable sentry telemetry
   session.defaultSession.webRequest.onBeforeRequest(
     { urls: ['*://*/apps/sentryproxy/*'] },
     (_details, callback) => callback({ cancel: true })
   )
 
-  // Serve bundled files via taut:// for embedded builds
   if (__TAUT_EMBEDDED__) {
     const tautJsPath = path.join(realResourcesPath, 'taut.js')
 

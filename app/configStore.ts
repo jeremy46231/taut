@@ -1,27 +1,70 @@
-// Taut Config Store
-// In-memory store for config.jsonc and user.css with change notifications
+// Taut Config Store: config.json and user.css in memory, with change notifications
 
-import type { DefaultConfig } from '../shared/Plugin'
+import type { DefaultConfig, JsonValue } from '../shared/Plugin'
 import type { TautBridge } from '../shared/TautBridge'
-import { defaultUserCss, emptyConfig } from './bundledData'
-import { initJsonc, type JsoncParser } from './cdn'
-import {
-  addPluginDefaults,
-  appendEntries,
-  checkPluginEdit,
-  detectLayout,
-  renderEntries,
-} from './configEdit'
-import {
-  defaultEntries,
-  descriptionLines,
-  unwrapDefaults,
-} from './pluginConfig'
+import { defaultUserCss } from './bundledData'
+import { initJsonc, type ParseError } from './cdn'
+import { deepEqual } from './helpers'
+import { withoutDefaults } from './pluginConfig'
 
 export interface TautConfig {
-  plugins: Record<string, { enabled: boolean } & Record<string, unknown>>
+  plugins: Record<string, Record<string, unknown>>
   telemetry?: boolean
+  /** the What's new megaphone in Slack's top bar */
+  whatsNewButton?: boolean
 }
+
+/** root keys left out of the file while they have these values */
+const ROOT_DEFAULTS: Record<string, JsonValue> = {
+  telemetry: true,
+  whatsNewButton: true,
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+
+/** whether parsed JSON is a config Taut can use, `plugins` filled in if it's missing */
+export function checkConfig(
+  parsed: unknown
+): { config: TautConfig } | { error: string } {
+  if (!isObject(parsed)) return { error: 'the file must be a JSON object' }
+  parsed.plugins ??= {}
+  if (!isObject(parsed.plugins)) return { error: '"plugins" must be an object' }
+  return { config: parsed as unknown as TautConfig }
+}
+
+/** anything but plain JSON is the commented JSON Taut wrote before 3.0, parsed with jsonc-parser loaded only for it */
+async function parseConfig(
+  text: string
+): Promise<{ config: TautConfig; plain: boolean } | { error: string }> {
+  if (!text.trim()) return { config: { plugins: {} }, plain: true }
+  let parsed: unknown
+  let plain = true
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    plain = false
+    let jsonc: Awaited<ReturnType<typeof initJsonc>>
+    try {
+      jsonc = await initJsonc()
+    } catch (err) {
+      return { error: `couldn't load jsonc-parser: ${err}` }
+    }
+    const { parse, printParseErrorCode } = jsonc
+    const errors: ParseError[] = []
+    parsed = parse(text, errors, { allowTrailingComma: true })
+    if (errors.length) {
+      const [{ error, offset }] = errors
+      return { error: `${printParseErrorCode(error)} at character ${offset}` }
+    }
+  }
+  const checked = checkConfig(parsed)
+  return 'error' in checked ? checked : { ...checked, plain }
+}
+
+/** how Taut always writes config.json */
+export const configText = (config: unknown) =>
+  `${JSON.stringify(config, null, 2)}\n`
 
 type Listener<T> = (value: T) => void
 type Unsubscribe = () => void
@@ -30,23 +73,24 @@ export class ConfigStore {
   private configText = ''
   private userCssText = ''
   private config: TautConfig = { plugins: {} }
+  /** why the file can't be read, it's never overwritten while this is set */
+  private parseError: string | null = null
+  /** false for the commented JSON Taut wrote before 3.0 */
+  private plainJson = true
+  private textSeq = 0
   private configListeners = new Set<Listener<TautConfig>>()
   private configTextListeners = new Set<Listener<string>>()
   private cssListeners = new Set<Listener<string>>()
-  private jsonc!: JsoncParser
-  private ensureConfigQueue: Promise<void> = Promise.resolve()
+  private editQueue: Promise<void> = Promise.resolve()
 
   constructor(private bridge: TautBridge) {}
 
   async init(): Promise<void> {
-    this.jsonc = await initJsonc()
-    this.configText = (await this.bridge.readConfigText()) || emptyConfig
+    await this.setText(await this.bridge.readConfigText())
     this.userCssText = (await this.bridge.readUserCss()) || defaultUserCss
-    this.config = this.parseConfig(this.configText)
 
-    this.bridge.onConfigTextChange((text) => {
-      this.configText = text
-      this.config = this.parseConfig(text)
+    this.bridge.onConfigTextChange(async (text) => {
+      if (!(await this.setText(text))) return
       this.notifyConfigTextListeners()
       this.notifyConfigListeners()
     })
@@ -57,15 +101,23 @@ export class ConfigStore {
     })
   }
 
-  private parseConfig(text: string): TautConfig {
-    try {
-      const parsed = this.jsonc.parse(text, undefined, {
-        allowTrailingComma: true,
-      }) as TautConfig | null
-      return parsed && typeof parsed === 'object' ? parsed : { plugins: {} }
-    } catch {
-      return { plugins: {} }
+  /** false when a later call started while this one was parsing and will handle the change, so this applied nothing and the caller shouldn't notify */
+  private async setText(text: string): Promise<boolean> {
+    const seq = ++this.textSeq
+    const parsed = await parseConfig(text)
+    if (seq !== this.textSeq) return false
+    this.configText =
+      text.trim() || !('config' in parsed) ? text : configText(parsed.config)
+    if ('error' in parsed) {
+      console.error(`[Taut] Can't read config.json: ${parsed.error}`)
+      this.parseError = parsed.error
+      this.config = { plugins: {} }
+    } else {
+      this.parseError = null
+      this.config = parsed.config
+      this.plainJson = parsed.plain
     }
+    return true
   }
 
   getConfig(): TautConfig {
@@ -74,6 +126,10 @@ export class ConfigStore {
 
   getConfigText(): string {
     return this.configText
+  }
+
+  getParseError(): string | null {
+    return this.parseError
   }
 
   getUserCssText(): string {
@@ -95,11 +151,13 @@ export class ConfigStore {
     return () => this.cssListeners.delete(listener)
   }
 
-  async updateConfigText(newText: string): Promise<boolean> {
+  updateConfigText(newText: string): Promise<boolean> {
+    return this.queueEdit(() => this.writeText(newText))
+  }
+
+  private async writeText(newText: string): Promise<boolean> {
     const success = await this.bridge.writeConfigText(newText)
-    if (success) {
-      this.configText = newText
-      this.config = this.parseConfig(newText)
+    if (success && (await this.setText(newText))) {
       this.notifyConfigTextListeners()
       this.notifyConfigListeners()
     }
@@ -124,96 +182,98 @@ export class ConfigStore {
     )
   }
 
-  async setPluginEnabled(
-    pluginName: string,
-    enabled: boolean
-  ): Promise<boolean> {
-    const text = this.configText
-    const tree = this.jsonc.parseTree(text, [], { allowTrailingComma: true })
-    const block = tree
-      ? this.jsonc.findNodeAtLocation(tree, ['plugins', pluginName])
-      : undefined
-    const hasEnabled =
-      block?.type === 'object' &&
-      (block.children ?? []).some((p) => p.children?.[0]?.value === 'enabled')
-    let newText: string
-    if (block?.type === 'object' && !hasEnabled) {
-      // jsonc.modify would land the new property before a same-line comment
-      const layout = detectLayout(text)
-      newText = appendEntries(
-        text,
-        block,
-        renderEntries([{ key: 'enabled', value: enabled }], layout.unit),
-        layout
-      )
-    } else {
-      const edits = this.jsonc.modify(
-        text,
-        ['plugins', pluginName, 'enabled'],
-        enabled,
-        { formattingOptions: { tabSize: 2, insertSpaces: true } }
-      )
-      newText = this.jsonc.applyEdits(text, edits)
-    }
-    const errors: import('jsonc-parser').ParseError[] = []
-    this.jsonc.parseTree(newText, errors, { allowTrailingComma: true })
-    if (
-      errors.length > 0 ||
-      this.parseConfig(newText).plugins[pluginName]?.enabled !== enabled
-    ) {
-      console.error(
-        `[Taut] Refusing to save config: toggling ${pluginName} produced an invalid file`
-      )
-      return false
-    }
-    return this.updateConfigText(newText)
+  /** queued so no edit is computed from stale text, false while the file can't be read */
+  private edit(change: (config: TautConfig) => void): Promise<boolean> {
+    return this.queueEdit(async () => {
+      if (this.parseError) {
+        console.error(`[Taut] Not saving config: ${this.parseError}`)
+        return false
+      }
+      const config = structuredClone(this.config)
+      change(config)
+      if (this.plainJson && deepEqual(config, this.config)) return true
+      return this.writeText(configText(config))
+    })
   }
 
-  /**
-   * Add a plugin's block to config.jsonc, or the default options its block is
-   * missing. Never rewrites a file it can't parse, and checks that the edit
-   * changed nothing else before saving. Calls are serialized so concurrent
-   * plugin loads can't race each other.
-   */
-  async ensurePluginConfig(
-    pluginName: string,
-    defaults: DefaultConfig,
-    description: string
-  ): Promise<void> {
-    const task = async () => {
-      const before = this.configText.trim() ? this.configText : emptyConfig
-      const outcome = addPluginDefaults(
-        this.jsonc,
-        before,
-        pluginName,
-        defaultEntries(defaults),
-        descriptionLines(description)
-      )
-      if ('unchanged' in outcome) return
-      if ('reason' in outcome) {
-        console.warn(
-          `[Taut] Not writing defaults for ${pluginName}: ${outcome.reason}`
+  /** e.g. `['plugins', id, key]` or `['telemetry']` */
+  setConfigValue(path: string[], value: JsonValue): Promise<boolean> {
+    return this.edit((config) => {
+      let cursor = config as unknown as Record<string, unknown>
+      for (const key of path.slice(0, -1)) {
+        if (!isObject(cursor[key])) cursor[key] = {}
+        cursor = cursor[key] as Record<string, unknown>
+      }
+      cursor[path[path.length - 1]] = value
+    })
+  }
+
+  /** remove one value, and a plugin's block once it's empty */
+  removeConfigValue(path: string[]): Promise<boolean> {
+    return this.edit((config) => {
+      const parents: Record<string, unknown>[] = []
+      let cursor: unknown = config
+      for (const key of path.slice(0, -1)) {
+        if (!isObject(cursor)) return
+        parents.push(cursor)
+        cursor = cursor[key]
+      }
+      if (!isObject(cursor)) return
+      delete cursor[path[path.length - 1]]
+      // empty objects below the root key, e.g. a plugin's block
+      for (let i = parents.length - 1; i >= 1; i--) {
+        const child = parents[i][path[i]]
+        if (isObject(child) && Object.keys(child).length === 0) {
+          delete parents[i][path[i]]
+        }
+      }
+    })
+  }
+
+  /** replace a plugin's block from an editor that showed `shown`: keys set before or changed from `shown` are kept, untouched ones stay unset */
+  setPluginBlock(
+    id: string,
+    block: Record<string, unknown>,
+    shown: Record<string, unknown>
+  ): Promise<boolean> {
+    return this.edit((config) => {
+      const before = isObject(config.plugins[id]) ? config.plugins[id] : {}
+      const stored = Object.fromEntries(
+        Object.entries(block).filter(
+          ([key, value]) =>
+            key in before || !(key in shown) || !deepEqual(value, shown[key])
         )
-        return
-      }
-      const problem = checkPluginEdit(
-        this.jsonc,
-        before,
-        outcome.text,
-        pluginName,
-        unwrapDefaults(defaults)
       )
-      if (problem) {
-        throw new Error(
-          `Refusing to save config for plugin ${pluginName}: ${problem}`
-        )
+      if (Object.keys(stored).length) config.plugins[id] = stored
+      else delete config.plugins[id]
+    })
+  }
+
+  /** once, when the file is still pre-3.0 commented config.jsonc, which wrote every default, so a value equal to its default becomes unset; blocks of unknown plugins are kept as is */
+  removeDefaults(defaultsById: Map<string, DefaultConfig>): Promise<boolean> {
+    if (this.plainJson) return Promise.resolve(true)
+    return this.edit((config) => {
+      for (const [id, block] of Object.entries(config.plugins)) {
+        const defaults = defaultsById.get(id)
+        if (!defaults || !isObject(block)) continue
+        const stored = withoutDefaults(defaults, block)
+        if (Object.keys(stored).length) config.plugins[id] = stored
+        else delete config.plugins[id]
       }
-      if (!(await this.updateConfigText(outcome.text))) {
-        throw new Error(`Failed to save config for plugin ${pluginName}`)
+      const root = config as unknown as Record<string, unknown>
+      for (const [key, value] of Object.entries(ROOT_DEFAULTS)) {
+        if (deepEqual(root[key], value)) delete root[key]
       }
-    }
-    this.ensureConfigQueue = this.ensureConfigQueue.catch(() => {}).then(task)
-    return this.ensureConfigQueue
+    })
+  }
+
+  private queueEdit<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.editQueue.catch(() => {}).then(task)
+    this.editQueue = result.then(
+      () => {},
+      () => {}
+    )
+    return result
   }
 
   private notifyConfigListeners() {

@@ -1,7 +1,3 @@
-// Taut Webpack Utilities
-// Hooks into Slack's webpack runtime before it loads
-// Captures module exports for discovery
-
 import type {
   Chunk,
   Exports,
@@ -12,16 +8,12 @@ import type {
 
 const global = globalThis as any
 
-// Module Registry & State
-
 let __webpack_require__: WebpackRequire | null = null
 const __webpackModuleRegistry = new Map<PropertyKey, Exports>()
 
-// Unwrapped module factories, so their .toString() is the
-// original source (for debug)
-/** key: module id */
+// by module id, unwrapped so `.toString()` gives the original source
 const __webpackModuleFactories = new Map<string, ModuleFactory>()
-// First module to export a given value, for debug
+// the first module to export each value, for debug
 const __webpackExportOwners = new WeakMap<object, string>()
 
 function registerExportOwner(moduleId: string, exports: any) {
@@ -48,15 +40,25 @@ function registerExportOwner(moduleId: string, exports: any) {
   }
 }
 
-// Export Matching Helpers
-
 type ExportMatcher<T> = (exp: any) => exp is T
 type SimpleMatcher = (exp: any) => boolean
 
-// Run a matcher against an export and each of its own enumerable properties
-// Returns the first matching value, or undefined if nothing matches
+/** matches a function export by its own name */
+export const byName =
+  (name: string): SimpleMatcher =>
+  (exp) =>
+    typeof exp === 'function' && exp.name === name
+
+/** matches a function export by the `meta.name` Slack gives its selectors, thunks and actions */
+export const byMeta =
+  (name: string): SimpleMatcher =>
+  (exp) =>
+    typeof exp === 'function' && exp.meta?.name === name
+
 function matchExportOrProps(exports: any, matcher: SimpleMatcher): any {
-  if (matcher(exports)) return exports
+  try {
+    if (matcher(exports)) return exports
+  } catch {}
   if (exports && typeof exports === 'object') {
     for (const key in exports) {
       if (!Object.hasOwn(exports, key)) continue
@@ -68,24 +70,18 @@ function matchExportOrProps(exports: any, matcher: SimpleMatcher): any {
   return undefined
 }
 
-// Export Waiting
-
 const pendingMatchers = new Map<
   symbol,
   { matcher: SimpleMatcher; resolve: (exp: any) => void }
 >()
 
-/**
- * Wait for a webpack export matching the given filter to be loaded.
- * Resolves immediately if already found, otherwise waits for it to appear.
- */
+/** resolves once a matching export loads, right away if one has */
 export function waitForExport<T>(matcher: ExportMatcher<T>): Promise<T>
 export function waitForExport<T>(matcher: SimpleMatcher): Promise<T>
 export function waitForExport(matcher: SimpleMatcher): Promise<any> {
   const existing = getExport(matcher)
   if (existing !== undefined) return Promise.resolve(existing)
 
-  // Not found yet, register a pending matcher
   return new Promise((resolve) => {
     const id = Symbol()
     pendingMatchers.set(id, {
@@ -105,18 +101,13 @@ function checkPendingMatchers(exports: any) {
   }
 }
 
-// Module Load Callbacks
-
 const moduleLoadCallbacks: ((exports: any) => void)[] = []
 
 export function onModuleLoaded(cb: (exports: any) => void): void {
   moduleLoadCallbacks.push(cb)
 }
 
-/**
- * Run a callback for every export matching the given predicate, both those
- * already in the registry and any that load in the future.
- */
+/** runs for every matching export, loaded now or later */
 export function forEachExport(
   matcher: SimpleMatcher,
   cb: (exp: any) => void
@@ -138,8 +129,6 @@ export function forEachExport(
   })
 }
 
-// Module Exports Patching
-
 type ModuleExportsPatcher = (exports: any, moduleId: string) => any | undefined
 const moduleExportsPatchers = new Set<ModuleExportsPatcher>()
 
@@ -147,39 +136,72 @@ export function patchModuleExports(patcher: ModuleExportsPatcher): void {
   moduleExportsPatchers.add(patcher)
 }
 
-/**
- * Wrap a function export by name
- */
-export function patchExportFunction(
-  name: string,
-  wrap: (original: (...args: any[]) => any) => (...args: any[]) => any
-): void {
-  patchModuleExports((exports) => {
-    if (!exports || typeof exports !== 'object') return
-    for (const key of Object.keys(exports)) {
-      let value: any
-      try {
-        value = exports[key]
-      } catch {
-        continue
-      }
-      if (typeof value !== 'function' || value.name !== name) continue
+type FunctionWrap = (
+  original: (...args: any[]) => any
+) => (...args: any[]) => any
 
-      // Webpack defines namespace exports as non-configurable getters, so the
-      // whole exports object has to be rebuilt
-      const descriptors = Object.getOwnPropertyDescriptors(exports)
-      descriptors[key] = {
-        value: wrap(value),
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      }
-      return Object.create(Object.getPrototypeOf(exports), descriptors)
+/** `exports` rebuilt with each function export `match` accepts replaced by `replace(it)`, or undefined if none matched */
+function replaceFunctionExports(
+  exports: any,
+  match: SimpleMatcher,
+  replace: FunctionWrap
+): any {
+  if (!exports || typeof exports !== 'object') return
+  let descriptors: PropertyDescriptorMap | undefined
+  for (const key of Object.keys(exports)) {
+    let value: any
+    try {
+      value = exports[key]
+    } catch {
+      continue
     }
-  })
+    if (typeof value !== 'function' || !match(value)) continue
+    // webpack defines namespace exports as non-configurable getters, so rebuild the whole exports object
+    descriptors ??= Object.getOwnPropertyDescriptors(exports)
+    descriptors[key] = {
+      value: replace(value),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    }
+  }
+  return (
+    descriptors && Object.create(Object.getPrototypeOf(exports), descriptors)
+  )
 }
 
-// Factory Wrapping
+/** wraps each exported function that `match` (like `byName('x')`) finds, as its module loads, returns a disposer */
+export function patchFunctionExport(
+  match: SimpleMatcher,
+  wrap: FunctionWrap
+): () => void {
+  let active = true
+  const patcher: ModuleExportsPatcher = (exports) =>
+    replaceFunctionExports(
+      exports,
+      (value) => {
+        try {
+          return match(value)
+        } catch {
+          return false
+        }
+      },
+      (original) => {
+        const wrapped = wrap(original)
+        // a loaded module keeps the export it was given, so disposing only turns the wrap off
+        const patched = Object.assign(function (this: unknown, ...args: any[]) {
+          return (active ? wrapped : original).apply(this, args)
+        }, original)
+        // keeps byName lookups finding it
+        return Object.defineProperty(patched, 'name', { value: original.name })
+      }
+    )
+  moduleExportsPatchers.add(patcher)
+  return () => {
+    active = false
+    moduleExportsPatchers.delete(patcher)
+  }
+}
 
 function wrapModuleFactory(
   moduleId: PropertyKey,
@@ -209,7 +231,13 @@ function wrapModuleFactory(
     __webpackModuleRegistry.set(moduleId, moduleExports)
     registerExportOwner(String(moduleId), moduleExports)
     checkPendingMatchers(moduleExports)
-    for (const cb of moduleLoadCallbacks) cb(moduleExports)
+    for (const cb of moduleLoadCallbacks) {
+      try {
+        cb(moduleExports)
+      } catch (err) {
+        console.error('[Taut] Module load callback failed:', err)
+      }
+    }
 
     return result
   }
@@ -217,8 +245,6 @@ function wrapModuleFactory(
   ;(wrappedFactory as any).__tautWrapped = true
   return wrappedFactory
 }
-
-// Push Interception
 
 type PushFn = (...items: Chunk[]) => number
 
@@ -254,14 +280,6 @@ function wrapWebpackPush(originalPush: PushFn): PushFn {
   }
 }
 
-// Early Hook Installation
-
-const CHUNK_GLOBAL_NAMES = [
-  'webpackChunkwebapp',
-  'rspackChunkwebapp',
-  'rspackChunkGantryV2',
-]
-
 function installWebpackHook(globalName: string) {
   let backingArray: Chunk[] | null = null
   let wrappedPush: PushFn | null = null
@@ -275,8 +293,7 @@ function installWebpackHook(globalName: string) {
     set(arr: Chunk[]) {
       backingArray = arr
 
-      let currentPush = arr.push.bind(arr)
-      wrappedPush = wrapWebpackPush(currentPush)
+      wrappedPush = wrapWebpackPush(arr.push.bind(arr))
 
       Object.defineProperty(arr, 'push', {
         configurable: true,
@@ -285,7 +302,6 @@ function installWebpackHook(globalName: string) {
           return wrappedPush
         },
         set(newPush: PushFn) {
-          currentPush = newPush
           wrappedPush = wrapWebpackPush(newPush)
         },
       })
@@ -293,9 +309,15 @@ function installWebpackHook(globalName: string) {
   })
 }
 
-for (const name of CHUNK_GLOBAL_NAMES) installWebpackHook(name)
-
-// Snapshot Lookups
+export const CHUNK_GLOBALS = [
+  'webpackChunkwebapp',
+  'rspackChunkwebapp',
+  'rspackChunkGantryV2',
+]
+export const slackLoadedFirst = CHUNK_GLOBALS.some((name) => global[name])
+// if slackLoadedFirst, app/main.ts will handle it
+if (!slackLoadedFirst)
+  for (const name of CHUNK_GLOBALS) installWebpackHook(name)
 
 function allExports(): [string, any][] {
   return Array.from(__webpackModuleRegistry.entries()).map(([id, exp]) => [
@@ -338,24 +360,24 @@ export function getByProps(props: string[], all = false) {
     exp && typeof exp === 'object' && props.every((prop) => prop in exp)
   return all ? getExport(matcher, true) : getExport(matcher)
 }
-// Source Inspection
 
-/** Get the source of a webpack module by id */
 export function getModuleSource(id: PropertyKey): string {
   const factory = __webpackModuleFactories.get(String(id))
   if (!factory) throw new Error(`[Taut] No module found with id: ${String(id)}`)
   return factory.toString()
 }
-/** Find the id of the module that exported the given value, if any */
+/** `[id, source]` of every module defined so far, for searching the bundle */
+export function* getModuleSources(): Generator<[string, string]> {
+  for (const [id, factory] of __webpackModuleFactories) {
+    yield [id, factory.toString()]
+  }
+}
 export function findModuleId(value: any): string | undefined {
   if (!value || (typeof value !== 'object' && typeof value !== 'function'))
     return undefined
   return __webpackExportOwners.get(value)
 }
-/**
- * Get the source of the module that exported the given value, falls back to
- * the value's own `.toString()` if no owning module can be found
- */
+/** falls back to the value's own `.toString()` without an owning module */
 export function getValueSource(value: any): string {
   const id = findModuleId(value)
   if (id !== undefined) return getModuleSource(id)
@@ -364,8 +386,6 @@ export function getValueSource(value: any): string {
     cause: value,
   })
 }
-
-// Debug Globals
 
 global.__webpackModuleRegistry = __webpackModuleRegistry
 global.__webpackModuleFactories = __webpackModuleFactories

@@ -1,10 +1,17 @@
-// Taut Desktop dev instance
-// Runs the app in its own config dir and Chromium profile so it sits beside a
-// normal install, and hands back the log, the process tree and a CDP session
+// Taut Desktop dev instance: runs the app in its own config dir beside a normal install, with its log, process tree and a CDP session
 
 import { type ChildProcess, spawn } from 'node:child_process'
 import { createWriteStream, existsSync, readFileSync, statSync } from 'node:fs'
-import { cp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import {
+  cp,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -29,8 +36,7 @@ export function realConfigDir(): string {
   return path.join(config, 'Taut')
 }
 
-// <config>/profile since desktop v3, before that slack picked <appData>/Slack,
-// and both may be lying around: the fresher cookie jar is the one in use
+// <config>/profile since desktop v3, Slack's <appData>/Slack before, and of the two the fresher cookie jar is in use
 export function realProfileDir(): string {
   const candidates = [
     path.join(realConfigDir(), 'profile'),
@@ -47,8 +53,6 @@ export function realProfileDir(): string {
     .sort((a, b) => b.mtime - a.mtime)[0]
   return best.mtime ? best.dir : candidates[0]
 }
-
-// Seeding
 
 const SKIP_SEED = new Set([
   'Cache',
@@ -80,7 +84,7 @@ async function copyTree(from: string, to: string) {
     recursive: true,
     force: true,
     filter: (src) => {
-      if (SKIP_SEED.has(path.basename(src))) return false
+      if (src !== from && SKIP_SEED.has(path.basename(src))) return false
       entries++
       return true
     },
@@ -103,8 +107,6 @@ export async function seedInstance(root: string) {
 
 export const resetInstance = (root: string) =>
   rm(root, { recursive: true, force: true })
-
-// Which bundle the instance loads
 
 const URL_PRESETS: Record<string, string> = {
   dev: 'http://localhost:3000/taut.js',
@@ -159,14 +161,12 @@ export async function freePort(from: number): Promise<number> {
   throw new Error(`no free port near ${from}`)
 }
 
-// Launching
-
 export interface InstanceOptions {
   /** instance name under ~/.taut-dev (default: dev) */
   name?: string
   /** an absolute instance root, instead of a name */
   root?: string
-  /** a URL_SPECS name or a URL; leaves prefs.json alone when unset */
+  /** a URL_SPECS name or a URL, leaves prefs.json alone when unset */
   url?: string
   /** copy the real install's config and profile in first */
   seed?: boolean
@@ -174,7 +174,7 @@ export interface InstanceOptions {
   reset?: boolean
   /** default: the first free port from 9222 */
   cdpPort?: number
-  /** node inspector for the main process; 0 leaves it closed */
+  /** node inspector for the main process, 0 leaves it closed */
   inspectPort?: number
   /** mirror the log to this process's stdout (default true) */
   echo?: boolean
@@ -182,8 +182,7 @@ export interface InstanceOptions {
   background?: boolean
   /** register slack:// and the desktop entry, as a real install does */
   systemInstall?: boolean
-  /** runs against each target while it is still paused at its first
-   * statement, the only place to get ahead of the page's own scripts */
+  /** runs against each target while it's paused at its first statement, the only way to get ahead of the page's own scripts */
   onAttach?: (page: Page) => unknown
 }
 
@@ -222,12 +221,7 @@ export interface Instance {
   onConsole(listener: (line: LogLine) => void): () => void
   /** RSS and cumulative CPU for every process the instance owns */
   processes(): Promise<ProcessSample[]>
-  /**
-   * runs a function in the main process, over its node inspector. an esm main
-   * has no `require`, so electron's objects come from the linked bindings:
-   * `electron_browser_window` holds BrowserWindow, `electron_browser_app`
-   * holds app, `electron_browser_web_contents` holds webContents
-   */
+  /** runs a function in the main process over its inspector, an esm main has no `require` so electron comes from `process._linkedBinding('electron_browser_app' | 'electron_browser_window' | 'electron_browser_web_contents')` */
   main<T, A extends unknown[]>(fn: (...args: A) => T, ...args: A): Promise<T>
   stop(): Promise<number>
 }
@@ -264,10 +258,23 @@ export async function launchInstance(
 
   await mkdir(path.join(root, 'logs'), { recursive: true })
   await mkdir(configDir, { recursive: true })
-  // read the real install's slack cache rather than downloading another
+  // one link per cached slack under its <version>-<arch> name, so this copy's cache renames and prunes only ever touch links
   const slackCache = path.join(realConfigDir(), 'slack')
-  if (!existsSync(path.join(configDir, 'slack')) && existsSync(slackCache)) {
-    await symlink(slackCache, path.join(configDir, 'slack'), 'dir')
+  const localSlack = path.join(configDir, 'slack')
+  if ((await lstat(localSlack).catch(() => null))?.isSymbolicLink())
+    await rm(localSlack)
+  if (existsSync(slackCache)) {
+    await mkdir(localSlack, { recursive: true })
+    // matches slackArch in desktop/src/slackDownload.ts: slack ships no arm64 linux build, so arm64 linux caches the x64 deb
+    const arch =
+      process.platform !== 'linux' && process.arch === 'arm64' ? 'arm64' : 'x64'
+    for (const entry of await readdir(slackCache)) {
+      const match = /^\d+(?:\.\d+)*(-(?:x64|arm64))?$/.exec(entry)
+      if (!match) continue
+      const link = path.join(localSlack, match[1] ? entry : `${entry}-${arch}`)
+      if (!(await lstat(link).catch(() => null)))
+        await symlink(path.join(slackCache, entry), link, 'dir')
+    }
   }
   const served = url && url in SERVED ? await serveBundle(url) : null
   if (url) await writeAppUrl(configDir, served?.url ?? URL_PRESETS[url] ?? url)
@@ -290,15 +297,9 @@ export async function launchInstance(
   const argv = [
     DESKTOP,
     `--user-data-dir=${configDir}`,
-    // macos prompts for the login password when the binary reaching for the
-    // "Taut Safe Storage" keychain item doesn't match its ACL, which a dev
-    // build never does. chromium falls back to a fixed dummy key, leaving
-    // seeded cookies and secrets.dat unreadable; slack's own token is in
-    // localStorage, so it still signs in
+    // a dev build never matches the "Taut Safe Storage" keychain ACL so macos asks for a password, the mock key leaves seeded cookies and secrets.dat unreadable but Slack's token is in localStorage
     '--use-mock-keychain',
-    // an unfocused or transparent window is otherwise treated as occluded, and
-    // chromium then stops rendering it and throttles its timers, which silently
-    // zeroes out every measurement
+    // chromium stops rendering an unfocused or transparent window it takes as occluded and throttles its timers, which zeroes out every measurement
     '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding',
     '--disable-background-timer-throttling',
@@ -336,8 +337,7 @@ export async function launchInstance(
       resolve(code)
     })
   })
-  // 'close' not 'exit': stdio keeps delivering buffered lines after the process
-  // is gone, and writing to an ended stream throws
+  // 'close' not 'exit' since stdio still delivers buffered lines after exit, and writing to an ended stream throws
   child.on('close', () => log.end(`# exited ${code}\n`))
   // a script that throws before stop() would otherwise leave the app running
   process.once('exit', () => child.kill('SIGKILL'))
@@ -365,8 +365,7 @@ export async function launchInstance(
     }
     return result.value
   }
-  // before anything else waits: the window is created a few hundred ms in, and
-  // once it has activated the app the focus is already stolen
+  // before anything else waits, the window appears a few hundred ms in and focus is gone once it activates the app
   if (background) await keepInBackground(mainEval, alive)
 
   const endpoint = await poll(
@@ -381,7 +380,7 @@ export async function launchInstance(
     if (event.method === 'Target.attachedToTarget') {
       const page = makePage(cdp, event.params.sessionId, () => elapsed(), alive)
       sessions.set(event.params.targetInfo.targetId, page)
-      void hold(page, event.params.targetInfo.type, onAttach)
+      hold(page, event.params.targetInfo.type, onAttach)
       return
     }
     if (event.method !== 'Runtime.consoleAPICalled') return
@@ -452,10 +451,7 @@ export async function launchInstance(
 
 // human note: this is ai jank, no idea how well it works
 
-// macos: an "accessory" app never becomes active, so the window can't take
-// focus. it still has to stay on screen and visible to the window server or
-// chromium stops rendering it (parking it offscreen zeroes out layout and
-// style), so it is made fully transparent and click-through instead
+// macos: an "accessory" app never becomes active, and the window is transparent and click-through since chromium stops rendering one parked offscreen
 async function keepInBackground(
   mainEval: (fn: (...args: any[]) => any, ...args: unknown[]) => Promise<any>,
   alive: () => boolean
@@ -480,15 +476,13 @@ async function keepInBackground(
         }
         if (!(app as any).__tautBackground) {
           ;(app as any).__tautBackground = true
-          // electron reasserts a regular activation policy as it starts up, so
-          // the app flashes to the front unless this keeps putting it back
+          // electron reasserts a regular activation policy as it starts, so the app flashes to the front unless this keeps resetting it
           const keep = setInterval(() => {
             app.setActivationPolicy?.('accessory')
             for (const win of BrowserWindow.getAllWindows()) hide(win)
           }, 50)
           setTimeout(() => clearInterval(keep), 20_000)
-          // setOpacity before a window is shown does not stick, so re-apply on
-          // every event that can put it in front
+          // setOpacity before a window is shown doesn't stick, so reapply on every event that can bring it forward
           app.on?.('browser-window-created', (_e: unknown, win: any) => {
             hide(win)
             for (const event of ['show', 'focus', 'restore', 'ready-to-show']) {
@@ -540,8 +534,6 @@ function pipeLines(
   }
 }
 
-// Driving a page
-
 export interface CpuProfile {
   /** wall time the profile covers */
   totalMs: number
@@ -556,7 +548,7 @@ export interface CpuProfile {
 export interface Page {
   sessionId: string
   send<T = any>(method: string, params?: object): Promise<T>
-  /** runs a function in the page; args are JSON-passed */
+  /** runs a function in the page, args are passed as JSON */
   eval<T, A extends unknown[]>(fn: (...args: A) => T, ...args: A): Promise<T>
   /** polls until the function is truthy, resolving with ms since exec */
   waitFor(
@@ -567,7 +559,7 @@ export interface Page {
   metrics(): Promise<Record<string, number>>
   /** v8 heap in bytes, after a forced collection */
   heapUsed(): Promise<number>
-  /** starts sampling; the returned function stops and folds the profile */
+  /** starts sampling, the returned function stops and folds the profile */
   recordCpu(intervalUs?: number): Promise<() => Promise<CpuProfile>>
   /** writes a .heapsnapshot for devtools */
   heapSnapshot(file: string): Promise<string>
@@ -641,8 +633,7 @@ function makePage(
   return page
 }
 
-// each sample is charged the time delta that preceded it, the way devtools
-// attributes them
+// each sample is charged the time delta before it, as devtools attributes them
 export function foldCpuProfile(profile: any): CpuProfile {
   const self = new Map<number, number>()
   for (let i = 0; i < profile.samples.length; i++) {

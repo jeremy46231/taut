@@ -13,13 +13,6 @@ type Shortcut = {
 type NotificationArgs = { message?: unknown }
 type MessageProps = { msg?: { channel?: string }; className?: string }
 
-const ROOT_CLASS = 'taut-streamer-mode'
-const THREAD_CLASS = 'taut-streamer-mode__private-thread'
-const REVEAL_CLASS = 'taut-streamer-mode__revealed'
-const THREADS_VIEW = '.p-threads_view'
-const LIST_ITEM = '.c-virtual_list__item'
-const SHARED_KEY = 'active'
-const STORAGE_KEY = 'taut_streamer_mode_active'
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform)
 
 function parseShortcut(value: unknown): Shortcut | null {
@@ -69,31 +62,51 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
   static readonly pluginName = 'Streamer Mode'
   static readonly description =
     'Blurs private information while others may be able to see your screen'
-  static readonly authors = '<@U06UYA5GMB5>, <@U080A3QP42C>, <@U07VC9705D4>'
+  static readonly authors = ['jeremy', 'rowan', 'miggy'] as const
+  static readonly category = 'privacy'
   static readonly defaultConfig = {
     enabled: false,
-    blur: opt(4, "4px shows the shape but isn't readable"),
+    blur: opt.number(
+      4,
+      "In pixels: 4 shows the shape but isn't easily readable",
+      {
+        min: 1,
+        max: 10,
+      }
+    ),
     shortcut: opt(
       'mod+shift+p',
-      '"" for off, "mod" is Ctrl (Cmd on mac), and a modifier is required'
+      'Leave empty for none. "mod" is Ctrl (Cmd on Mac), and a modifier is required'
     ),
-    hideVip: true,
+    dmPreviewBlur: opt.select(
+      [
+        { value: 'all', label: 'Who it is with, and what it says' },
+        { value: 'content', label: 'Only what it says' },
+      ],
+      'all',
+      'What to blur in DM previews',
+      { label: 'DM preview blur' }
+    ),
+    privateChannelNames: opt(true, 'Blur the names of private channels'),
+    channelListReveal: opt.select(
+      [
+        { value: 'list', label: 'The whole list' },
+        { value: 'section', label: 'Its section' },
+        { value: 'channel', label: 'Only that channel' },
+      ],
+      'list',
+      'What hovering over a blurred channel in the sidebar unblurs'
+    ),
+    hideVip: opt(true, 'Hide VIP badges and icons', {
+      label: 'Hide VIP',
+    }),
     silenceNotifications: true,
     autoOnScreenShare: true,
   }
 
-  private get options() {
-    const { blur, shortcut } = this.config
-    return {
-      ...this.config,
-      blur: typeof blur === 'number' && blur > 0 ? blur : 4,
-      shortcut: typeof shortcut === 'string' ? shortcut : '',
-    }
-  }
-
   private active = new this.api.SharedStore<boolean>(
-    SHARED_KEY,
-    localStorage.getItem(STORAGE_KEY) === 'true'
+    'active',
+    localStorage.getItem('taut_streamer_mode_active') === 'true'
   )
   /** a screen share turned it on, so the share ending turns it off */
   private autoActivated = false
@@ -104,7 +117,7 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
     this.api.setStyle(this.css(), 'streamer')
     this.injectButton()
 
-    if (this.options.silenceNotifications) {
+    if (this.config.silenceNotifications) {
       this.api.redux.patchThunk(
         'showNotification',
         (original) => (args: NotificationArgs) =>
@@ -112,7 +125,7 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
       )
     }
 
-    const shortcut = parseShortcut(this.options.shortcut)
+    const shortcut = parseShortcut(this.config.shortcut)
     if (shortcut) {
       const onKeyDown = (event: KeyboardEvent) => {
         if (event.repeat || !matches(event, shortcut)) return
@@ -124,20 +137,20 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
       this.api.signal.addEventListener('abort', () =>
         window.removeEventListener('keydown', onKeyDown, true)
       )
-    } else if (this.options.shortcut) {
+    } else if (this.config.shortcut) {
       this.log(
-        `Ignoring "${this.options.shortcut}", a shortcut needs Ctrl, Cmd or Alt`
+        `Ignoring "${this.config.shortcut}", a shortcut needs Ctrl, Cmd or Alt`
       )
     }
 
     this.markPrivateThreads()
     this.followThreadHover()
-    if (this.options.autoOnScreenShare) this.watchScreenShares()
+    if (this.config.autoOnScreenShare) this.watchScreenShares()
     this.log('Started')
   }
 
   stop() {
-    document.documentElement.classList.remove(ROOT_CLASS)
+    document.documentElement.classList.remove('taut-streamer-mode')
     if (this.originalGetDisplayMedia) {
       navigator.mediaDevices.getDisplayMedia = this.originalGetDisplayMedia
       this.originalGetDisplayMedia = null
@@ -147,12 +160,12 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
   private toggle = () => {
     this.autoActivated = false
     this.apply(!this.active.get())
-    localStorage.setItem(STORAGE_KEY, String(this.active.get()))
+    localStorage.setItem('taut_streamer_mode_active', String(this.active.get()))
   }
 
   private apply(active: boolean) {
     this.active.set(active)
-    document.documentElement.classList.toggle(ROOT_CLASS, active)
+    document.documentElement.classList.toggle('taut-streamer-mode', active)
   }
 
   private watchScreenShares() {
@@ -193,7 +206,7 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
         return (
           <Original
             {...props}
-            className={`${props.className ?? ''} ${THREAD_CLASS}`}
+            className={`${props.className ?? ''} taut-streamer-mode__private-thread`}
           />
         )
       }
@@ -202,20 +215,24 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
 
   private revealed = ''
 
-  // A thread's heading, root, replies and footer are flat siblings, so we need js
+  // a thread's heading, root, replies and footer are flat siblings, so css can't hover them as one
   private followThreadHover() {
     const follow = (event: Event) => {
-      const view = document.querySelector(THREADS_VIEW)
+      const view = document.querySelector('.p-threads_view')
       if (!view) return
       const target = event.target
       const row =
-        target instanceof Element ? target.closest(LIST_ITEM) : undefined
+        target instanceof Element
+          ? target.closest('.c-virtual_list__item')
+          : undefined
       const thread = row && view.contains(row) ? threadOf(row) : ''
       if (thread === this.revealed) return
       this.revealed = thread
-      for (const item of Array.from(view.querySelectorAll(LIST_ITEM)))
+      for (const item of Array.from(
+        view.querySelectorAll('.c-virtual_list__item')
+      ))
         item.classList.toggle(
-          REVEAL_CLASS,
+          'taut-streamer-mode__revealed',
           !!thread && threadOf(item) === thread
         )
     }
@@ -234,7 +251,7 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
       mainKey: string
       modifiers?: string[]
     }>('KeyboardKeysTooltip')
-    const shortcut = parseShortcut(this.options.shortcut)
+    const shortcut = parseShortcut(this.config.shortcut)
     const modifiers = shortcut && [
       ...(shortcut.mod ? [IS_MAC ? '⌘' : 'Ctrl'] : []),
       ...(shortcut.alt ? [IS_MAC ? 'Option' : 'Alt'] : []),
@@ -283,11 +300,33 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
   }
 
   private css(): string {
-    const root = `html.${ROOT_CLASS}`
-    const { blur, hideVip } = this.options
+    const root = `html.taut-streamer-mode`
+    const { hideVip, dmPreviewBlur, privateChannelNames, channelListReveal } =
+      this.config
+    const blur = Math.max(0, this.config.blur)
     const lock = '[data-inline-channel-type-icon^="lock"]'
-    const sidebarRow =
-      '.p-channel_sidebar__channel:is([data-qa-channel-sidebar-channel-type="private"], [data-qa-channel-sidebar-channel-type="mpim"]):not([data-qa-channel-sidebar-channel-is-selected="true"])'
+    const sidebarRowOf = (types: string) =>
+      `.p-channel_sidebar__channel:is(${types}):not([data-qa-channel-sidebar-channel-is-selected="true"])`
+    const privateType = '[data-qa-channel-sidebar-channel-type="private"]'
+    const groupType = '[data-qa-channel-sidebar-channel-type="mpim"]'
+    const sidebarRow = sidebarRowOf(`${privateType}, ${groupType}`)
+    const sidebarName = `${sidebarRow} .p-channel_sidebar__name`
+    const hot = ':is(:hover, :focus-visible)'
+    const item = '.p-channel_sidebar__static_list__item'
+    const hotItem = `${item}${hot}`
+    const heading = `${item}[data-item-key^="sectionHeading-"]`
+    const sidebarRevealed = {
+      list: [
+        `.p-channel_sidebar:is(:hover, :has(:focus-visible)) ${sidebarName}`,
+      ],
+      // a section's rows are flat siblings from its heading up to the next heading
+      section: [
+        `${hotItem} ${sidebarName}`,
+        `${hotItem} ~ ${item}:not(${hotItem} ~ ${heading} ~ *) ${sidebarName}`,
+        `${item}:has(~ ${hotItem}):not(:has(~ ${heading}${hot}, ~ ${heading} ~ ${hotItem})) ${sidebarName}`,
+      ],
+      channel: [`${hotItem} ${sidebarName}`],
+    }[channelListReveal]
     const activityRow = '[data-qa="activity-item-container"]'
     const preview = '[data-qa="activity-item-message"]'
 
@@ -300,33 +339,50 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
       '[data-qa="dms_channel"]:not(:has(.p-activity_ia4_page__item--selected))'
     const groupName = `${dmsRow}:has(.c-base_icon_image_stacked) [data-qa="dms-channel-sender-name"]`
 
-    const threadBody = `.${THREAD_CLASS} :is(.c-message_kit__gutter__left, .c-message_kit__gutter__right)`
-    const suggestion =
-      '.c-search_autocomplete__suggestion_item:is(:has(.c-channel_icon svg[data-qa^="lock"]), [data-type="mpim"])'
+    const threadBody = `.taut-streamer-mode__private-thread :is(.c-message_kit__gutter__left, .c-message_kit__gutter__right)`
+    const suggestionOf = (types: string) =>
+      `.c-search_autocomplete__suggestion_item:is(${types})`
+    const privateSuggestion = ':has(.c-channel_icon svg[data-qa^="lock"])'
+    const groupSuggestion = '[data-type="mpim"]'
+    const suggestion = suggestionOf(`${privateSuggestion}, ${groupSuggestion}`)
     const suggestionText = '.c-search_autocomplete__suggestion_item_left'
 
     const mention = `.c-inline_channel_entity:has(${lock}):not(${activityRow} *) .c-channel_entity__name`
 
     const inRow = `:is(${preview}, ${destination}, [data-qa="dms-channel-sender-name"])`
+    const blurred = [
+      ...(privateChannelNames
+        ? [
+            `${root} ${sidebarRowOf(privateType)} .p-channel_sidebar__name`,
+            `${root} ${mention}`,
+            `${root} ${activityRow} ${privateDestination}`,
+            `${root} ${suggestionOf(privateSuggestion)} ${suggestionText}`,
+          ]
+        : []),
+      ...(dmPreviewBlur === 'all'
+        ? [
+            `${root} ${sidebarRowOf(groupType)} .p-channel_sidebar__name`,
+            `${root} ${activityRow} ${groupDestination}`,
+            `${root} ${groupName}`,
+            `${root} ${suggestionOf(groupSuggestion)} ${suggestionText}`,
+          ]
+        : []),
+      `${root} ${activityRow}:has(${lock}) ${preview}`,
+      `${root} ${activityRow}:has([data-qa="direct-messages"]) ${preview}`,
+      `${root} ${dmsRow} ${preview}`,
+      `${root} .p-threads_view ${threadBody}`,
+    ]
     return `
-      ${root} ${sidebarRow} .p-channel_sidebar__name,
-      ${root} ${mention},
-      ${root} ${activityRow} :is(${privateDestination}, ${groupDestination}),
-      ${root} ${activityRow}:has(${lock}) ${preview},
-      ${root} ${activityRow}:has([data-qa="direct-messages"]) ${preview},
-      ${root} ${dmsRow} ${preview},
-      ${root} ${groupName},
-      ${root} .p-threads_view ${threadBody},
-      ${root} ${suggestion} ${suggestionText} {
+      ${blurred.join(',\n      ')} {
         filter: blur(${blur}px);
         transition: filter 0.15s;
       }
-      ${root} .p-channel_sidebar:hover ${sidebarRow} .p-channel_sidebar__name,
+      ${sidebarRevealed.map((selector) => `${root} ${selector}`).join(',\n      ')},
       ${root} .c-inline_channel_entity:hover .c-channel_entity__name,
       ${root} ${activityRow}:hover ${inRow},
       ${root} ${dmsRow}:hover ${inRow},
-      ${root} .${REVEAL_CLASS} ${threadBody},
-      ${root} .${REVEAL_CLASS} ${mention},
+      ${root} .taut-streamer-mode__revealed ${threadBody},
+      ${root} .taut-streamer-mode__revealed ${mention},
       ${root} ${suggestion}:hover ${suggestionText} {
         filter: none;
       }

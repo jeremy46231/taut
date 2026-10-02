@@ -1,7 +1,6 @@
-// Taut userscript backend
-// Implements TautBridge interface using GM_* APIs for userscript environment
+// Taut userscript bridge: TautBridge on GM_* APIs
 
-import { defaultUserCss, emptyConfig } from '../app/bundledData'
+import { defaultUserCss } from '../app/bundledData'
 import type {
   BlobStore,
   TautBridge,
@@ -31,10 +30,13 @@ declare function GM_xmlhttpRequest(details: {
   headers?: Record<string, string>
   data?: string
   anonymous?: boolean
+  responseType?: 'arraybuffer' | 'blob' | 'json' | 'stream'
   onload?: (response: {
     status: number
     statusText: string
-    responseText: string
+    /** an ArrayBuffer with responseType 'arraybuffer' */
+    response: unknown
+    responseText?: string
     responseHeaders: string
   }) => void
   onerror?: (response: { error: string }) => void
@@ -71,11 +73,6 @@ declare const GM_cookie:
         cb: (error?: string) => void
       ): void
     }
-
-const CONFIG_KEY = 'taut-config'
-const USER_CSS_KEY = 'taut-user-css'
-const SECRET_PREFIX = 'taut-secret:'
-const USER_PLUGINS_KEY = 'taut-user-plugins'
 
 function makePrefixedBlobStore(prefix: string): BlobStore {
   return {
@@ -121,7 +118,7 @@ function makeBlobStore(namespace: string): BlobStore {
 }
 
 const gmCookie = typeof GM_cookie !== 'undefined' ? GM_cookie : null
-const secretsBlob = makePrefixedBlobStore(SECRET_PREFIX)
+const secretsBlob = makePrefixedBlobStore('taut-secret:')
 
 function validUserPlugins(value: unknown): Record<string, string> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
@@ -133,7 +130,7 @@ function validUserPlugins(value: unknown): Record<string, string> {
 }
 
 function readUserPlugins(): Record<string, string> {
-  return validUserPlugins(GM_getValue(USER_PLUGINS_KEY, {}))
+  return validUserPlugins(GM_getValue('taut-user-plugins', {}))
 }
 
 async function updateUserPlugins(
@@ -144,7 +141,7 @@ async function updateUserPlugins(
     return await navigator.locks.request('taut:user-plugins', async () => {
       const plugins = readUserPlugins()
       update(plugins)
-      GM_setValue(USER_PLUGINS_KEY, plugins)
+      GM_setValue('taut-user-plugins', plugins)
       return true
     })
   } catch {
@@ -195,6 +192,10 @@ export const userscriptBridge: TautBridge = {
     return secretsBlob.write(key, value)
   },
 
+  async deleteSecret(key: string): Promise<boolean> {
+    return secretsBlob.delete(key)
+  },
+
   userPlugins: {
     async list() {
       return Object.keys(readUserPlugins())
@@ -214,7 +215,7 @@ export const userscriptBridge: TautBridge = {
     },
     onChange(cb): Unsubscribe {
       const listenerId = GM_addValueChangeListener(
-        USER_PLUGINS_KEY,
+        'taut-user-plugins',
         (_key, oldValue, newValue, remote) => {
           if (!remote) return
           const oldPlugins = validUserPlugins(oldValue)
@@ -243,21 +244,18 @@ export const userscriptBridge: TautBridge = {
   PATHS: null,
 
   async start(): Promise<void> {
-    if (!GM_getValue(CONFIG_KEY)) {
-      GM_setValue(CONFIG_KEY, emptyConfig)
-    }
-    if (!GM_getValue(USER_CSS_KEY)) {
-      GM_setValue(USER_CSS_KEY, defaultUserCss)
+    if (!GM_getValue('taut-user-css')) {
+      GM_setValue('taut-user-css', defaultUserCss)
     }
   },
 
   async readConfigText(): Promise<string> {
-    return GM_getValue(CONFIG_KEY, emptyConfig) as string
+    return GM_getValue('taut-config', '') as string
   },
 
   async writeConfigText(text: string): Promise<boolean> {
     try {
-      GM_setValue(CONFIG_KEY, text)
+      GM_setValue('taut-config', text)
       return true
     } catch {
       return false
@@ -266,7 +264,7 @@ export const userscriptBridge: TautBridge = {
 
   onConfigTextChange(cb: (text: string) => void): Unsubscribe {
     const listenerId = GM_addValueChangeListener(
-      CONFIG_KEY,
+      'taut-config',
       (_key, _oldValue, newValue, remote) => {
         if (remote && typeof newValue === 'string') cb(newValue)
       }
@@ -275,12 +273,12 @@ export const userscriptBridge: TautBridge = {
   },
 
   async readUserCss(): Promise<string> {
-    return GM_getValue(USER_CSS_KEY, defaultUserCss) as string
+    return GM_getValue('taut-user-css', defaultUserCss) as string
   },
 
   async writeUserCss(text: string): Promise<boolean> {
     try {
-      GM_setValue(USER_CSS_KEY, text)
+      GM_setValue('taut-user-css', text)
       return true
     } catch {
       return false
@@ -289,7 +287,7 @@ export const userscriptBridge: TautBridge = {
 
   onUserCssChange(cb: (css: string) => void): Unsubscribe {
     const listenerId = GM_addValueChangeListener(
-      USER_CSS_KEY,
+      'taut-user-css',
       (_key, _oldValue, newValue, remote) => {
         if (remote && typeof newValue === 'string') cb(newValue)
       }
@@ -326,6 +324,8 @@ export const userscriptBridge: TautBridge = {
         headers,
         data: typeof init?.body === 'string' ? init.body : undefined,
         anonymous: hasCookie,
+        // raw bytes, so binary bodies survive (responseText decodes them)
+        responseType: 'arraybuffer',
         onload(r) {
           const responseHeaders = new Headers()
           for (const line of r.responseHeaders.trim().split('\r\n')) {
@@ -336,12 +336,22 @@ export const userscriptBridge: TautBridge = {
                 line.slice(idx + 1).trim()
               )
           }
+          // possibly from the manager's realm, so no instanceof
+          const buffer = r.response as ArrayBuffer | null | undefined
+          const body =
+            typeof buffer?.byteLength === 'number'
+              ? new Uint8Array(buffer)
+              : (r.responseText ?? '')
           resolve(
-            new Response(r.responseText, {
-              status: r.status,
-              statusText: r.statusText,
-              headers: responseHeaders,
-            })
+            // these statuses need a null body or the Response constructor throws
+            new Response(
+              [101, 204, 205, 304].includes(r.status) ? null : body,
+              {
+                status: r.status,
+                statusText: r.statusText,
+                headers: responseHeaders,
+              }
+            )
           )
         },
         onerror(r) {

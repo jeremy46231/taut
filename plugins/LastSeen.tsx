@@ -21,18 +21,13 @@ type StoreMessage = {
 
 const MAX_SEEN = 2000
 const SCAN_EVERY = 15_000
-const UNITS = [
-  ['day', 24 * 60 * 60 * 1000],
-  ['hour', 60 * 60 * 1000],
-  ['minute', 60 * 1000],
-] as const
 
 /** the id, unless a bot posted under it with an xoxp */
 const human = (msg: RtmEvent | undefined, id: unknown) =>
   msg && typeof id === 'string' && !msg.bot_id && !msg.app_id ? id : undefined
 
 const when = (event: RtmEvent): number => {
-  const at = Number.parseFloat(event.event_ts ?? event.ts)
+  const at = Number.parseFloat(event.event_ts ?? event.ts ?? '')
   return at > 0 ? at * 1000 : Date.now()
 }
 
@@ -42,7 +37,11 @@ const ACTIVITY: Record<
 > = {
   // an away also arrives in bulk on subscribe, so only active means "now"
   presence_change: (e) =>
-    e.presence === 'active' ? (e.users ?? e.user) : undefined,
+    e.presence === 'active'
+      ? Array.isArray(e.users)
+        ? (e.users as string[])
+        : e.user
+      : undefined,
   user_typing: (e) => e.user,
   // a reply carries the parent's own edited.user, from whenever that edit was
   message: (e) =>
@@ -54,14 +53,18 @@ const ACTIVITY: Record<
   reaction_removed: (e) => e.user,
   pin_added: (e) => e.user,
   pin_removed: (e) => e.user,
-  file_shared: (e) => e.user_id,
+  file_shared: (e) => (typeof e.user_id === 'string' ? e.user_id : undefined),
   sh_room_join: (e) => e.user,
 }
 
 function ago(at: number): string {
   const elapsed = Date.now() - at
   const format = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
-  for (const [unit, size] of UNITS)
+  for (const [unit, size] of [
+    ['day', 24 * 60 * 60 * 1000],
+    ['hour', 60 * 60 * 1000],
+    ['minute', 60 * 1000],
+  ] as const)
     if (elapsed >= size)
       return format.format(-Math.max(1, Math.floor(elapsed / size)), unit)
   return 'just now'
@@ -72,7 +75,8 @@ export default class LastSeen extends TautPlugin<typeof LastSeen> {
   static readonly pluginName = 'Last Seen'
   static readonly description =
     'Shows when someone was last seen on their profile'
-  static readonly authors = '<@U06UYA5GMB5>, <@U080A3QP42C>'
+  static readonly authors = ['jeremy', 'rowan'] as const
+  static readonly category = 'people'
   static readonly defaultConfig = {
     enabled: false,
     showLastMessage: true,
@@ -97,7 +101,7 @@ export default class LastSeen extends TautPlugin<typeof LastSeen> {
     await this.messages.load()
     if (this.api.signal.aborted) return
 
-    if (this.config.showObservedPresence !== false) {
+    if (this.config.showObservedPresence) {
       for (const [type, who] of Object.entries(ACTIVITY))
         this.api.rtm.on(type, (event) => this.sighting(who(event), when(event)))
       this.readStore()
@@ -168,7 +172,6 @@ export default class LastSeen extends TautPlugin<typeof LastSeen> {
     this.log('Started')
   }
 
-  // scan all the messages in the store to fill last seen data
   private readStore() {
     if (Date.now() - this.scanned < SCAN_EVERY) return
     this.scanned = Date.now()
@@ -204,7 +207,7 @@ export default class LastSeen extends TautPlugin<typeof LastSeen> {
         setSeen(Math.max(observed, message ?? 0))
       }
       settle(null)
-      if (this.config.showLastMessage !== false)
+      if (this.config.showLastMessage)
         this.lastMessageOf(userId)
           .then(settle)
           .catch(() => {})

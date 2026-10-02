@@ -1,4 +1,4 @@
-// Shows the avatars of everyone who reacted inside each reaction pill
+// Shows the avatars of everyone who reacted next to each reaction
 
 import { opt, TautPlugin } from '$taut'
 
@@ -7,30 +7,23 @@ type ReactionProps = { users?: string[] }
 // stable identity, so context consumers don't rerender
 const NO_REACTORS: string[] = []
 
-const avatarLimit = (value: unknown): number => {
-  const count = Math.trunc(Number(value))
-  return Number.isFinite(count) && count > 0 ? Math.min(count, 20) : 4
-}
-
 export default class WhoReacted extends TautPlugin<typeof WhoReacted> {
   static readonly id = 'WhoReacted'
   static readonly pluginName = 'Who Reacted'
   static readonly description =
     'Shows the avatars of everyone who reacted next to each reaction'
-  static readonly authors = '<@U06UYA5GMB5>, <@U080A3QP42C>'
+  static readonly authors = ['jeremy', 'rowan'] as const
+  static readonly category = 'messages'
   static readonly defaultConfig = {
     enabled: false,
-    maxAvatars: opt(
+    maxAvatars: opt.number(
       4,
-      'how many avatars to show before the rest collapse into a +N'
+      'how many avatars to show before the rest collapse into a +N',
+      { min: 1, max: 20 }
     ),
   }
 
   private readonly ReactorsContext = React.createContext<string[]>(NO_REACTORS)
-  private get maxAvatars() {
-    return avatarLimit(this.config.maxAvatars)
-  }
-
   private readonly Avatar = ({ userId }: { userId: string }) => {
     const profile = this.api.members.useMember(userId)?.profile
     // members with no avatar_hash yet get a url that 404s
@@ -50,7 +43,7 @@ export default class WhoReacted extends TautPlugin<typeof WhoReacted> {
   private readonly Reactors = () => {
     const users = React.useContext(this.ReactorsContext)
     if (!users.length) return null
-    const shown = users.slice(0, this.maxAvatars)
+    const shown = users.slice(0, this.config.maxAvatars)
     const rest = users.length - shown.length
     return (
       <span className="taut-reactors">

@@ -1,7 +1,10 @@
-// Taut Elements Registry
-// Central place to find Slack's React components
-
-import { lazyComponent, reactPromise } from '../slack/react'
+import {
+  type ComponentType,
+  getComponentSource,
+  lazyComponent,
+  reactPromise,
+} from '../slack/react'
+import { RichTextInput } from '../slack/richTextInput'
 
 export type SvgIconProps = {
   name: string
@@ -37,6 +40,7 @@ export type IconButtonBaseProps = {
   'aria-label'?: string
   'data-qa'?: string
   onClick?: () => void
+  onMouseDown?: React.MouseEventHandler<HTMLButtonElement>
   tabIndex?: number
   children?: React.ReactNode
 }
@@ -71,9 +75,10 @@ export type LabelProps = {
   isDisabled?: boolean
   className?: string
   id?: string
+  /** a control to wrap, e.g. a checkbox with `type: 'inline'` */
+  children?: React.ReactNode
 }
 
-/** One row of a Slack menu */
 export type MenuTemplateItem = {
   key: string
   label?: React.ReactNode
@@ -88,20 +93,17 @@ export type MenuTemplateItem = {
   danger?: boolean
 }
 
-/**
- * Slack's two-field date range control, with a calendar popover.
- * Dates are strings in `dateFormat`, which defaults to YYYY-MM-DD.
- */
+/** Slack's two-field date range control with a calendar popover */
 export type DateRangePickerProps = {
   id?: string
   className?: string
   /** initial value only: the picker is uncontrolled after mount */
   selectedStartDate?: string | null
   selectedEndDate?: string | null
-  /** the picker manages its own state; these only report the new value */
+  /** only report the new value, the picker keeps its own state */
   onStartDateChange?: (change: { selectedStartDate: string }) => void
   onEndDateChange?: (change: { selectedEndDate: string }) => void
-  /** how dates are parsed and reported back, e.g. "YYYY-MM-DD" */
+  /** how dates are parsed and reported back, defaults to "YYYY-MM-DD" */
   dateFormat?: string
   /** how dates are shown, when it should differ from `dateFormat` */
   displayFormat?: string | null
@@ -128,7 +130,7 @@ export type DateRangePickerProps = {
   'aria-label'?: string
 }
 
-/** Slack's section wrapper: a FieldSet holding a Legend and its controls */
+/** Slack's section wrapper, holding a Legend and its controls */
 export type FieldSetProps = {
   id?: string
   'data-qa'?: string
@@ -141,13 +143,12 @@ export type LegendProps = {
   children?: React.ReactNode
 }
 
-/** Secondary line under a control */
+/** secondary line under a control */
 export type HintProps = {
   children?: React.ReactNode
   className?: string
 }
 
-/** One option in a BasicSelect */
 export type SelectOption = { label: string; value: string }
 
 export type BasicSelectProps = {
@@ -155,7 +156,8 @@ export type BasicSelectProps = {
   options: SelectOption[]
   selectedOption?: SelectOption
   onSelectionChange: (option: SelectOption) => void
-  width?: number
+  /** pixels, or a CSS length like "100%" */
+  width?: number | string
   ariaLabel?: string
   selectDataQa?: string
   isDisabled?: boolean
@@ -175,7 +177,7 @@ export type AvatarProps = {
   botProfile?: object
   /** an image set to draw instead of the member's or bot's own */
   icons?: object
-  /** side length in pixels; also picks which stored image size is used */
+  /** side length in pixels, which also picks the stored image size */
   size?: number
   className?: string
   /** whether it links to the profile and reacts to a click */
@@ -189,7 +191,7 @@ export type AvatarProps = {
   'data-qa'?: string
 }
 
-/** Wraps a trigger so hovering it opens Slack's profile card */
+/** wraps a trigger so hovering it opens Slack's profile card */
 export type ProfileHoverTriggerProps = {
   /** the member whose profile to show */
   memberId?: string
@@ -216,6 +218,7 @@ export type MenuTriggerProps = {
 export type FormTextInputProps = {
   id?: string
   name?: string
+  type?: 'text' | 'password'
   value: string
   onChange: (value: string) => void
   onBlur?: React.FocusEventHandler<HTMLInputElement>
@@ -234,6 +237,97 @@ export type FormTextInputProps = {
   className?: string
 }
 
+/** Slack's checkbox, the native `c-input_checkbox` */
+export type CheckboxProps = {
+  checked?: boolean
+  onChange?: React.ChangeEventHandler<HTMLInputElement>
+  indeterminate?: boolean
+  disabled?: boolean
+  id?: string
+  className?: string
+  'aria-label'?: string
+  'aria-describedby'?: string
+}
+
+/** Slack's time dropdown, which also takes typed times */
+export type TimePickerProps = {
+  /** 24-hour "HH:MM" */
+  value?: string
+  onChange?: (time: string) => void
+  ariaLabel?: string
+  /** how far apart the listed times are */
+  optionsHourIncrement?:
+    | 'five_minute'
+    | 'ten_minute'
+    | 'quarter'
+    | 'half'
+    | 'full'
+  size?: 'small' | 'medium'
+  /** pixels, or a CSS length */
+  width?: number | string
+  showTimeZone?: boolean
+  isDisabled?: boolean
+  isRequired?: boolean
+  min?: string
+  max?: string
+}
+
+/** opens Slack's emoji picker from the element it wraps */
+export type EmojiMenuTriggerProps = {
+  /** the emoji's name without colons, like "no_entry" */
+  onEmojiSelected: (emoji: unknown, name: string) => void
+  position?: 'top' | 'bottom' | 'top-left'
+  offsetY?: number
+  /** one element, not a fragment */
+  children: React.ReactElement
+}
+
+/** the toggleable pill used for search filters */
+export type TagProps = {
+  /** like `'informative'` */
+  style?: string
+  isMicro?: boolean
+  children?: React.ReactNode
+}
+
+export type FilterPillProps = {
+  isActive?: boolean
+  onClick?: React.MouseEventHandler<HTMLButtonElement>
+  isDisabled?: boolean
+  className?: string
+  id?: string
+  'aria-pressed'?: boolean
+  children?: React.ReactNode
+}
+
+/** Slack's floating layer, drawn beside `targetBounds` until it's closed */
+export type PopoverProps = {
+  isOpen: boolean
+  targetBounds: DOMRect
+  windowRef: WeakRef<Window>
+  position?: string
+  offsetX?: number
+  offsetY?: number
+  onClose: () => void
+  ariaRole?: string
+  ariaLabel?: string
+  children?: React.ReactNode
+}
+
+/** colors are hex without the `#` (like "e01e5a"), and `value` is only read on mount */
+export type HSVPickerProps = {
+  value: string
+  onChange: (hex: string) => void
+  /** also show an opacity slider, and report 8-digit hex */
+  alpha?: boolean
+  className?: string
+}
+
+// other components share these names, so pick slack's by the markup it draws
+// TODO: is this janky?
+const drawing = (marker: string) => (component: ComponentType) =>
+  getComponentSource(component).includes(marker)
+
 export const elementsAPIPromise = (async () => {
   await reactPromise
 
@@ -244,22 +338,35 @@ export const elementsAPIPromise = (async () => {
       'ProfileHoverTrigger'
     ),
     MrkdwnElement: lazyComponent<MrkdwnElementProps>('MrkdwnElement'),
-    Button: lazyComponent<ButtonProps>('Button'),
-    Tooltip: lazyComponent<TooltipProps>('Tooltip'),
+    Button: lazyComponent<ButtonProps>('Button', drawing('"c-button"')),
+    Tooltip: lazyComponent<TooltipProps>(
+      'Tooltip',
+      drawing('"data-sk":"tooltip"')
+    ),
     IconButtonBase: lazyComponent<IconButtonBaseProps>('IconButtonBase'),
     ConfirmationModal:
       lazyComponent<ConfirmationModalProps>('ConfirmationModal'),
     InlineAlert: lazyComponent<InlineAlertProps>('InlineAlert'),
-    Label: lazyComponent<LabelProps>('Label'),
+    Label: lazyComponent<LabelProps>('Label', drawing('"c-label"')),
     FormTextInput: lazyComponent<FormTextInputProps>('FormTextInput'),
+    Checkbox: lazyComponent<CheckboxProps>('Checkbox'),
+    FilterPill: lazyComponent<FilterPillProps>('FilterPill'),
+    Tag: lazyComponent<TagProps>('Tag'),
     DateRangePicker: lazyComponent<DateRangePickerProps>('DateRangePicker'),
     FieldSet: lazyComponent<FieldSetProps>('FieldSet'),
-    Legend: lazyComponent<LegendProps>('Legend'),
+    Legend: lazyComponent<LegendProps>('Legend', drawing('"c-legend"')),
     Hint: lazyComponent<HintProps>('Hint'),
     BasicSelect: lazyComponent<BasicSelectProps>('BasicSelect'),
     Blocks: lazyComponent<BlocksProps>('Blocks'),
     MenuTrigger: lazyComponent<MenuTriggerProps>('MenuTrigger'),
     MenuFromTemplate: lazyComponent<MenuFromTemplateProps>('MenuFromTemplate'),
+    TimePicker: lazyComponent<TimePickerProps>('TimePicker'),
+    EmojiMenuTrigger: lazyComponent<EmojiMenuTriggerProps>(
+      'Connect(EmojiMenuTrigger)'
+    ),
+    Popover: lazyComponent<PopoverProps>('Popover', drawing('"c-popover"')),
+    HSVPicker: lazyComponent<HSVPickerProps>('HSVPicker'),
+    RichTextInput,
   }
 })()
 

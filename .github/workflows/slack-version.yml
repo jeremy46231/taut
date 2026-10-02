@@ -32,6 +32,7 @@ jobs:
         id: electron
         env:
           LATEST: ${{ steps.versions.outputs.latest }}
+        working-directory: ${{ runner.temp }}
         run: |
           curl -fsSL "https://downloads.slack-edge.com/desktop-releases/linux/x64/$LATEST/slack-desktop-$LATEST-amd64.deb" -o slack.deb
           ar p slack.deb data.tar.xz | tar -xJ --strip-components=5 ./usr/lib/slack/resources/app.asar
@@ -42,12 +43,12 @@ jobs:
           # the arm64 linux build rebuilds these from public packages, flag drift
           NOTE=""
           for spec in $(node -e '
-            import("./scripts/lib/natives.ts").then(({ SLACK_NATIVE_MODULES }) => {
-              for (const m of SLACK_NATIVE_MODULES) console.log(`${m.slackPackage ?? m.package}=${m.version}`)
-            })'); do
+            import(process.argv[1]).then(({ SLACK_NATIVE_MODULES }) => {
+              for (const m of SLACK_NATIVE_MODULES) console.log(`${m.slackPackage ?? m.package}=${m.slackVersion ?? m.version}`)
+            })' "$GITHUB_WORKSPACE/scripts/lib/natives.ts"); do
             npx @electron/asar extract-file app.asar "node_modules/${spec%%=*}/package.json"
             THEIRS=$(jq -r .version package.json); rm package.json
-            [ "$THEIRS" = "${spec#*=}" ] || NOTE="$NOTE ${spec%%=*} is $THEIRS in Slack, scripts/lib/natives.ts pins ${spec#*=}."
+            [ "$THEIRS" = "${spec#*=}" ] || NOTE="$NOTE ${spec%%=*} is $THEIRS in Slack, scripts/lib/natives.ts was checked against ${spec#*=}."
           done
           echo "natives=$NOTE" >> "$GITHUB_OUTPUT"
           rm slack.deb app.asar
@@ -81,6 +82,9 @@ jobs:
             npm install --package-lock-only --save-exact --no-audit --no-fund "electron@$SLACK_ELECTRON"
             ELECTRON_NOTE=" Electron updated from $TAUT_ELECTRON to $SLACK_ELECTRON."
           fi
+          # npm rewrites package.json in its own style, which biome's check rejects
+          BIOME=$(jq -r '.packages["node_modules/@biomejs/biome"].version' package-lock.json)
+          npx --yes "@biomejs/biome@$BIOME" format --write package.json desktop/package.json
           git commit -am "update to slack $LATEST"
           git push -u origin "$BRANCH"
           gh pr create --title "Slack $LATEST" --body "Slack released $LATEST (Taut uses $CURRENT).$ELECTRON_NOTE$NATIVES_NOTE"

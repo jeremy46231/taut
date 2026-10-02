@@ -1,5 +1,3 @@
-// Reads Slack member profiles from the redux store
-
 import { retry } from '../helpers'
 import { reactPromise } from './react'
 import {
@@ -32,15 +30,12 @@ export type SlackMember = {
 
 type GetMemberById = (state: any, userId: string) => SlackMember | undefined
 
-// Mirror Slack's name logic (module CD4g `computeDerivedNames`)
+// mirrors Slack's name logic (`computeDerivedNames`)
 const deburr = (s: string): string =>
   s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
 const lc = (s: string): string => String(s).toLowerCase()
 
-/**
- * return a copy of the `member` object with the given fields
- * replaced
- */
+/** returns a copy, with the derived `_lc` and normalized names updated too */
 export function modifyMemberObject(
   member: SlackMember,
   edits: {
@@ -73,11 +68,7 @@ export function modifyMemberObject(
   return next
 }
 
-/**
- * slack stands a member it hasn't loaded in with a placeholder carrying empty
- * names and a `profile` shared by every other placeholder, so nothing outside
- * here should ever see one
- */
+/** hides Slack's unloaded-member placeholders, which have empty names and all share one `profile` */
 const loaded = (member?: SlackMember): SlackMember | undefined =>
   !member || member.isUnknown === true || member.isNonExistent === true
     ? undefined
@@ -116,7 +107,7 @@ function fetchMembers(userId: string): Promise<void> {
   return batch.done
 }
 
-/** Get a member, asking slack to fetch them if the store hasn't got them yet */
+/** asks Slack to fetch the member if the store doesn't have them yet */
 export async function getMember(
   userId: string
 ): Promise<SlackMember | undefined> {
@@ -141,7 +132,7 @@ export const membersPromise = (async () => {
   const React = await reactPromise
   const { useReduxState } = await reduxPromise
   let selector: GetMemberById | undefined
-  void waitForExport<GetMemberById>(
+  waitForExport<GetMemberById>(
     (e: any) =>
       typeof e === 'function' && e.meta?.key === 'createSelectorGetMemberById'
   ).then((found) => {
@@ -150,14 +141,14 @@ export const membersPromise = (async () => {
   const readMember: GetMemberById = (state, userId) =>
     selector?.(state, userId) ?? state.members?.[userId]
 
-  /** Reactively read a member, asking Slack to load them if it hasn't yet */
+  /** reactively read a member, asking Slack to load them if it hasn't yet */
   function useMember(userId: string): SlackMember | undefined {
     const member = useReduxState<SlackMember | undefined>((s) =>
       loaded(readMember(s, userId))
     )
     const missing = !member
     React.useEffect(() => {
-      if (userId && missing) void getMember(userId)
+      if (userId && missing) getMember(userId)
     }, [userId, missing])
     return member
   }

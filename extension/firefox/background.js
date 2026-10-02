@@ -1,17 +1,12 @@
 // Taut Firefox background script
 
+import { serializeResponse } from '../shared/fetchBody.js'
+
 ;(() => {
   const DEFAULT_URL = __TAUT_EMBEDDED__
     ? browser.runtime.getURL('taut.js')
     : 'https://taut.jer.app/taut.js'
 
-  /** @type {browser.webRequest.RequestFilter} */
-  const SLACK_FILTER = {
-    urls: ['https://app.slack.com/client/*'],
-    types: ['main_frame'],
-  }
-
-  // Rewrite the response body: remove CSP meta tag, inject bridge-setup + taut.js
   browser.webRequest.onBeforeRequest.addListener(
     (details) => {
       const filter = browser.webRequest.filterResponseData(details.requestId)
@@ -36,7 +31,6 @@
           .querySelector('meta[http-equiv="Content-Security-Policy"]')
           ?.remove()
 
-        // Collect and remove all script elements
         const scripts = Array.from(doc.querySelectorAll('script')).map((s) => ({
           src: s.src,
           textContent: s.textContent,
@@ -46,7 +40,7 @@
           s.remove()
         })
 
-        // Inject: bridge-setup (sets window.TautBridge), then taut.js, then Slack's scripts
+        // bridge-setup.js defines window.TautBridge, so it goes before taut.js
         const scriptError = (/** @type {string} */ url) =>
           `alert('[Taut] Failed to load a script.\\n\\nURL: ' + ${JSON.stringify(url)} + '\\n\\n${url.includes('://localhost') ? 'Make sure your server is running.' : 'Ask in #taut for help.'}')`
 
@@ -76,14 +70,10 @@
         filter.close()
       }
     },
-    SLACK_FILTER,
+    { urls: ['https://app.slack.com/client/*'], types: ['main_frame'] },
     ['blocking']
   )
 
-  const CONFIG_KEY = 'taut-config'
-  const CSS_KEY = 'taut-user-css'
-  const SECRET_PREFIX = 'taut-secret:'
-  const USER_PLUGIN_PREFIX = 'taut-user-plugin:'
   /** @param {string} namespace */
   const blobPrefix = (namespace) =>
     `taut:blob:${encodeURIComponent(namespace)}:`
@@ -98,7 +88,7 @@
   // let fetchWithCookie send `X-Taut-Cookie`, move it to `Cookie`
   browser.webRequest.onBeforeSendHeaders.addListener(
     (details) => {
-      // Only extensions can trigger this (tab -1)
+      // only the extension's own requests have tab -1, so pages can't use this
       if (details.tabId !== -1) return {}
       const headers = details.requestHeaders || []
       const marker = headers.find(
@@ -138,35 +128,39 @@
 
   /** @type {import('../shared/rpc').ExtensionRpc} */
   const methods = {
-    readConfigText: async () => (await storageGet(CONFIG_KEY)) ?? '',
+    readConfigText: async () => (await storageGet('taut-config')) ?? '',
     writeConfigText: async (text) => {
-      await storageSet(CONFIG_KEY, text)
+      await storageSet('taut-config', text)
       return true
     },
-    readUserCss: async () => (await storageGet(CSS_KEY)) ?? '',
+    readUserCss: async () => (await storageGet('taut-user-css')) ?? '',
     writeUserCss: async (text) => {
-      await storageSet(CSS_KEY, text)
+      await storageSet('taut-user-css', text)
       return true
     },
-    readSecret: async (key) => (await storageGet(SECRET_PREFIX + key)) ?? null,
+    readSecret: async (key) => (await storageGet(`taut-secret:${key}`)) ?? null,
     writeSecret: async (key, value) => {
-      await storageSet(SECRET_PREFIX + key, value)
+      await storageSet(`taut-secret:${key}`, value)
+      return true
+    },
+    deleteSecret: async (key) => {
+      await browser.storage.local.remove(`taut-secret:${key}`)
       return true
     },
     listUserPlugins: async () => {
       const all = await browser.storage.local.get(null)
       return Object.keys(all)
-        .filter((key) => key.startsWith(USER_PLUGIN_PREFIX))
-        .map((key) => key.slice(USER_PLUGIN_PREFIX.length))
+        .filter((key) => key.startsWith('taut-user-plugin:'))
+        .map((key) => key.slice('taut-user-plugin:'.length))
     },
     readUserPlugin: async (id) =>
-      (await storageGet(USER_PLUGIN_PREFIX + id)) ?? null,
+      (await storageGet(`taut-user-plugin:${id}`)) ?? null,
     writeUserPlugin: async (id, code) => {
-      await storageSet(USER_PLUGIN_PREFIX + id, code)
+      await storageSet(`taut-user-plugin:${id}`, code)
       return true
     },
     deleteUserPlugin: async (id) => {
-      await browser.storage.local.remove(USER_PLUGIN_PREFIX + id)
+      await browser.storage.local.remove(`taut-user-plugin:${id}`)
       return true
     },
     blobList: async (namespace) => {
@@ -203,20 +197,8 @@
       browser.cookies
         .remove({ url: details.url, name: details.name })
         .then((r) => r != null),
-    fetch: async (url, init) => {
-      const response = await fetchWithCookie(url, init)
-      /** @type {Record<string, string>} */
-      const headers = {}
-      response.headers.forEach((value, key) => {
-        headers[key] = value
-      })
-      return {
-        status: response.status,
-        statusText: response.statusText,
-        headers,
-        body: await response.text(),
-      }
-    },
+    fetch: async (url, init) =>
+      serializeResponse(await fetchWithCookie(url, init)),
   }
 
   browser.runtime.onMessage.addListener((message) => {

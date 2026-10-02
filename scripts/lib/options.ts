@@ -5,7 +5,7 @@ import { versions } from './versions.ts'
 
 export type Runtime = 'chrome' | 'firefox' | 'electron' | 'userscript'
 
-/** Fill in the build-time constants of shared/options.{html,js} for one loader */
+/** fills in the build-time constants of shared/options.{html,js} for one loader */
 export async function renderOptions(runtime: Runtime, embedded: boolean) {
   const substitute = (src: string) =>
     src

@@ -1,5 +1,4 @@
-// Blocks Slack's built-in tracking requests
-// Pattern list sourced from uAssets and AdGuard filters via 3kh0/slick
+// Blocks Slack's built-in tracking and analytics requests
 
 import { TautPlugin } from '$taut'
 
@@ -30,14 +29,13 @@ function globToRegex(pattern: string): RegExp {
   return new RegExp(`^${escaped}$`, 'i')
 }
 
-const BLOCKED_RESPONSE = new Response('', { status: 200 })
-
 export default class NoTrack extends TautPlugin<typeof NoTrack> {
   static readonly id = 'NoTrack'
   static readonly pluginName = 'No Tracking'
   static readonly description =
     "Blocks Slack's built-in tracking and analytics requests"
-  static readonly authors = '<@U080A3QP42C>, <@U06UYA5GMB5>'
+  static readonly authors = ['rowan', 'jeremy'] as const
+  static readonly category = 'privacy'
   static readonly defaultConfig = {
     enabled: true,
   }
@@ -61,9 +59,7 @@ export default class NoTrack extends TautPlugin<typeof NoTrack> {
   }
 
   private exportByName<T = any>(name: string): Promise<T> {
-    return this.api.waitForExport<T>(
-      (exp: any) => typeof exp === 'function' && exp.name === name
-    )
+    return this.api.waitForExport<T>(this.api.byName(name))
   }
 
   private async stopTracing(): Promise<void> {
@@ -102,17 +98,15 @@ export default class NoTrack extends TautPlugin<typeof NoTrack> {
     this.running = true
     this.matchers = TRACKING_PATTERNS.map(globToRegex)
 
-    // Patch fetch
     this.originalFetch = window.fetch
     const originalFetch = this.originalFetch
     window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
       if (this.isBlocked(NoTrack.urlString(input))) {
-        return Promise.resolve(BLOCKED_RESPONSE.clone())
+        return Promise.resolve(new Response('', { status: 200 }))
       }
       return originalFetch(input, init)
     }
 
-    // Patch XHR
     this.originalXHROpen = XMLHttpRequest.prototype.open
     const originalOpen = this.originalXHROpen
     const isBlocked = this.isBlocked.bind(this)
@@ -121,10 +115,9 @@ export default class NoTrack extends TautPlugin<typeof NoTrack> {
       url: string | URL,
       ...rest: any[]
     ) {
-      if (isBlocked(url.toString())) {
-        this.send = () => {}
-        return
-      }
+      // still opened so setRequestHeader works, and a reused xhr gets its send back
+      if (isBlocked(url.toString())) this.send = () => {}
+      else delete (this as Partial<XMLHttpRequest>).send
       return Reflect.apply(originalOpen, this, [method, url, ...rest])
     }
 

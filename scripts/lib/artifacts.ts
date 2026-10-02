@@ -1,5 +1,4 @@
 export type Variant = 'standard' | 'embedded'
-export const VARIANTS: Variant[] = ['standard', 'embedded']
 
 export type Os = 'mac' | 'win' | 'linux'
 export type Arch = 'x64' | 'arm64'
@@ -43,11 +42,11 @@ export const INSTALLER_EXTENSIONS = [
 export const variantSuffix = (variant: Variant) =>
   variant === 'embedded' ? '-embedded' : ''
 
-/** Filename stem shared by every installer for one platform and variant */
+/** filename stem shared by every installer for one platform and variant */
 export const desktopArtifactStem = (key: PlatformKey, variant: Variant) =>
   `taut-${key}${variantSuffix(variant)}`
 
-/** The platform key matching the machine running the build */
+/** the platform key matching the machine running the build */
 export function hostPlatformKey(): PlatformKey {
   const arm = process.arch === 'arm64'
   switch (process.platform) {

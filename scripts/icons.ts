@@ -16,10 +16,9 @@ const toPng = (input: string | Buffer) =>
 
 await mkdir(asset('icons'), { recursive: true })
 
-// Optimize the source logo in place
 await writeFile(asset('logo.png'), await toPng(asset('logo.png')))
 
-// Extension icon sizes from the logo, plus the served favicon / userscript icon
+// extension icon sizes, plus the site's favicon and userscript icon
 const logo = await readFile(asset('logo.png'))
 for (const size of [16, 32, 48, 128]) {
   await writeFile(

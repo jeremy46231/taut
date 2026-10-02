@@ -1,6 +1,6 @@
 // Taut Desktop Preload
 
-import type { TautBridge } from '../../shared/TautBridge'
+import type { TautBridge, TautInstall } from '../../shared/TautBridge'
 import type { RpcArgs, RpcMethod, RpcResult, SerialFetchInit } from './rpc'
 
 declare const __TAUT_LOADER_VERSION__: string
@@ -8,13 +8,15 @@ declare const __TAUT_EMBEDDED__: boolean
 
 const { contextBridge, ipcRenderer } = require('electron')
 
-// Kick off all async fetches in parallel to minimize latency
 const origPreloadPromise = ipcRenderer.invoke(
   'taut:get-original-preload'
 ) as Promise<string | null>
 const origHtmlPromise = fetch(location.href).then((r) => r.text())
 const tautUrlPromise = ipcRenderer.invoke('taut:get-app-url') as Promise<string>
 const pathsPromise = ipcRenderer.invoke('taut:get-paths')
+const installPromise = (
+  ipcRenderer.invoke('taut:get-install') as Promise<TautInstall>
+).catch(() => undefined)
 
 const isClientPage = /\/client(\/|$)/.test(location.pathname)
 
@@ -26,8 +28,7 @@ if (isClientPage) {
 
 ;(async () => {
   try {
-    // Eval Slack's original preload first so its contextBridge.exposeInMainWorld
-    // calls run before any Slack scripts execute
+    // Slack's preload runs first so its exposeInMainWorld calls land before Slack's scripts
     const origPreload = await origPreloadPromise
     if (origPreload) {
       console.log('[Taut] Evaluating Slack original preload')
@@ -59,6 +60,7 @@ if (isClientPage) {
   }
 
   const paths = await pathsPromise
+  const install = await installPromise
 
   const call = <M extends RpcMethod>(
     method: M,
@@ -68,9 +70,28 @@ if (isClientPage) {
   contextBridge.exposeInMainWorld('TautBridge', {
     loader: 'electron' as const,
     loaderVersion: __TAUT_LOADER_VERSION__,
-    bridgeVersion: 4,
+    bridgeVersion: 3,
     embedded: __TAUT_EMBEDDED__,
+    install,
     PATHS: paths,
+
+    // see autoUpdate.ts
+    ...(install?.canSelfUpdate
+      ? {
+          restartToUpdate: () => ipcRenderer.invoke('taut:restart-to-update'),
+          onUpdateReady(cb: (version: string) => void) {
+            const handler = (_: unknown, version: string) => cb(version)
+            ipcRenderer.on('taut:update-ready', handler)
+            ;(
+              ipcRenderer.invoke('taut:get-update-ready') as Promise<
+                string | null
+              >
+            ).then((version) => version && cb(version))
+            return () =>
+              ipcRenderer.removeListener('taut:update-ready', handler)
+          },
+        }
+      : {}),
 
     cookies: {
       get: (details) => call('cookieGet', [details]).catch(() => null),
@@ -82,6 +103,7 @@ if (isClientPage) {
     readSecret: (key) => call('readSecret', [key]).catch(() => null),
     writeSecret: (key, value) =>
       call('writeSecret', [key, value]).catch(() => false),
+    deleteSecret: (key) => call('deleteSecret', [key]).catch(() => false),
 
     userPlugins: {
       list: () => call('listUserPlugins', []).catch(() => []),
@@ -162,7 +184,6 @@ if (isClientPage) {
   const doc = new DOMParser().parseFromString(html, 'text/html')
   doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.remove()
 
-  // Collect and remove all script elements
   const scripts = Array.from(doc.querySelectorAll('script')).map((s) => ({
     src: (s as HTMLScriptElement).src,
     textContent: s.textContent,
@@ -172,7 +193,6 @@ if (isClientPage) {
     s.remove()
   })
 
-  // Inject taut.js, then Slack's scripts
   const scriptError = (url: string) =>
     `alert('[Taut] Failed to load a script.\\n\\nURL: ' + ${JSON.stringify(url)} + '\\n\\n${url.includes('://localhost') ? 'Make sure your server is running.' : 'Ask in #taut for help.'}')`
 
@@ -190,7 +210,6 @@ if (isClientPage) {
     doc.head.appendChild(s)
   }
 
-  // Reconstruct the document
   document.open()
   document.write(`<!DOCTYPE html>${doc.documentElement.outerHTML}`)
   document.close()

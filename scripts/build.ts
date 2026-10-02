@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Builds Taut. Run with --help for usage.
+// Builds Taut, run with --help for usage
 
 import {
   hostPlatformKey,
@@ -13,7 +13,14 @@ try {
   process.loadEnvFile()
 } catch {}
 
-const TARGETS = ['taut', 'extension', 'userscript', 'desktop'] as const
+const TARGETS = [
+  'taut',
+  'extension',
+  'userscript',
+  'desktop',
+  'versions',
+  'server',
+] as const
 type Target = (typeof TARGETS)[number]
 
 const USAGE = `usage: npm run build -- [targets...] [platforms...] [--standard] [--embedded]
@@ -31,6 +38,7 @@ examples
   npm run build -- extension --embedded     embedded extensions only
   npm run build -- desktop                  desktop app for this machine
   npm run build -- desktop mac win-arm --standard --embedded
+  npm run build -- versions server          stage the Worker's assets from dist/
 `
 
 function fail(message: string): never {
@@ -87,6 +95,15 @@ if (targets.has('userscript')) {
 if (targets.has('desktop')) {
   const { buildDesktop } = await import('./build/desktop.ts')
   await buildDesktop([...platforms], variantList)
+}
+
+if (targets.has('versions')) {
+  const { buildVersions } = await import('./build/versions.ts')
+  await buildVersions()
+}
+if (targets.has('server')) {
+  const { buildServer } = await import('./build/server.ts')
+  await buildServer()
 }
 
 console.log('[build] Done!')

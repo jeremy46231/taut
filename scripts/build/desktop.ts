@@ -1,5 +1,6 @@
 // Builds and packages the Taut desktop app with electron-builder
 
+import { existsSync } from 'node:fs'
 import { access, cp, mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
@@ -9,6 +10,10 @@ import {
   Platform,
 } from 'electron-builder'
 import { build } from 'esbuild'
+import {
+  DESKTOP_FEED_URL,
+  DESKTOP_UPDATE_CHANNELS,
+} from '../../shared/updates.ts'
 import {
   DESKTOP_PLATFORMS,
   desktopArtifactStem,
@@ -32,29 +37,11 @@ import { ensureSlackSounds } from '../lib/slackSounds.ts'
 import { versions } from '../lib/versions.ts'
 
 const APP_ID = 'app.jer.taut'
-const SRC = path.join(DESKTOP, 'src')
 const OUT = path.join(DIST, 'desktop')
 const BUILD_ROOT = path.join(DESKTOP, 'build')
 const STAGE = path.join(BUILD_ROOT, 'app')
 const ICON = path.join(ASSETS, 'logo.png')
 const MAC_ICON = path.join(ASSETS, 'icons', 'mac', 'taut.icns')
-const MAC_ICON_CATALOG = path.join(ASSETS, 'icons', 'mac', 'Assets.car')
-const MAC_ENTITLEMENTS = path.join(DESKTOP, 'entitlements.mac.plist')
-const MAC_ENTITLEMENTS_INHERIT = path.join(
-  DESKTOP,
-  'entitlements.mac.inherit.plist'
-)
-
-const ELECTRON_PLATFORMS = {
-  mac: Platform.MAC,
-  win: Platform.WINDOWS,
-  linux: Platform.LINUX,
-}
-const ELECTRON_ARCHES = { x64: Arch.x64, arm64: Arch.arm64 }
-
-const INSTALLER_EXT = new RegExp(`\\.(${INSTALLER_EXTENSIONS.join('|')})$`, 'i')
-
-// Stage the variant's compiled JS into desktop/build/app/
 
 export async function buildDesktopJs(
   variant: Variant,
@@ -85,7 +72,7 @@ export async function buildDesktopJs(
   await Promise.all(
     entries.map(({ entry, out, format }) =>
       build({
-        entryPoints: [path.join(SRC, entry)],
+        entryPoints: [path.join(DESKTOP, 'src', entry)],
         outfile: path.join(STAGE, out),
         bundle: true,
         platform: 'node',
@@ -101,7 +88,10 @@ export async function buildDesktopJs(
   await writeFile(path.join(STAGE, 'options.html'), options.html)
   await writeFile(path.join(STAGE, 'options.js'), options.js)
   await cp(ICON, path.join(STAGE, 'icon.png'))
-  await cp(path.join(SRC, 'download.html'), path.join(STAGE, 'download.html'))
+  await cp(
+    path.join(DESKTOP, 'src', 'download.html'),
+    path.join(STAGE, 'download.html')
+  )
 }
 
 // arm64 linux runs slack's x64 javascript with rebuilt native modules
@@ -122,8 +112,6 @@ async function assertNatives(key: PlatformKey) {
   }
 }
 
-// electron-builder config per (variant, platform)
-
 function makeConfig(
   variant: Variant,
   key: PlatformKey,
@@ -134,6 +122,14 @@ function makeConfig(
   const isMac = DESKTOP_PLATFORMS[key].os === 'mac'
 
   return {
+    publish: isEmbedded
+      ? null
+      : {
+          provider: 'generic',
+          url: DESKTOP_FEED_URL,
+          channel: DESKTOP_UPDATE_CHANNELS[key].channel,
+        },
+    releaseInfo: isEmbedded ? {} : { vendor: { slackVersion: versions.slack } },
     appId: APP_ID,
     productName: 'Taut',
     electronVersion: versions.electron,
@@ -164,7 +160,10 @@ function makeConfig(
       ...(isMac
         ? [
             {
-              from: path.relative(DESKTOP, MAC_ICON_CATALOG),
+              from: path.relative(
+                DESKTOP,
+                path.join(ASSETS, 'icons', 'mac', 'Assets.car')
+              ),
               to: 'Assets.car',
             },
           ]
@@ -188,8 +187,8 @@ function makeConfig(
       forceCodeSigning: true,
       hardenedRuntime: true,
       gatekeeperAssess: false,
-      entitlements: MAC_ENTITLEMENTS,
-      entitlementsInherit: MAC_ENTITLEMENTS_INHERIT,
+      entitlements: path.join(DESKTOP, 'entitlements.mac.plist'),
+      entitlementsInherit: path.join(DESKTOP, 'entitlements.mac.inherit.plist'),
       notarize: mac.notarize,
       extendInfo: {
         CFBundleIconName: path.basename(MAC_ICON, '.icns'),
@@ -212,8 +211,6 @@ function makeConfig(
     },
   }
 }
-
-// Package one variant for the given platforms, move installers to dist/
 
 async function packageVariant(variant: Variant, platforms: PlatformKey[]) {
   console.log(
@@ -240,29 +237,32 @@ async function packageVariant(variant: Variant, platforms: PlatformKey[]) {
           : `[build-desktop] macOS signing: Developer ID "${identity}"${notarytool ? '' : ', NOT notarized (set APPLE_API_KEY, APPLE_API_KEY_ID and APPLE_API_ISSUER, see .env.example)'}`
       )
     }
-    // claude's explanation of this weird workaround:
-    // electron-builder picks a per-file 7z filter, and for arm64 that's the
-    // arm64 filter from 7-zip 21.03+, which the 2019-era nsis7z.dll it bundles
-    // can't extract, so the installer silently ships without Taut.exe
-    // forcing BCJ keeps the archive readable by that old extractor on every arch
+    // the 2019 nsis7z.dll electron-builder bundles can't extract the arm64 7z filter and the installer ships without Taut.exe, so force BCJ
     if (def.os === 'win') {
       process.env.ELECTRON_BUILDER_7Z_FILTER = 'BCJ'
     } else {
       delete process.env.ELECTRON_BUILDER_7Z_FILTER
     }
 
-    let targets = def.targets
+    // Squirrel.Mac only installs from a zip
+    let targets =
+      def.os === 'mac' && variant === 'standard'
+        ? [...def.targets, 'zip']
+        : def.targets
     if (targets.includes('rpm') && !commandExists('rpmbuild')) {
       console.warn('[build-desktop] rpmbuild not found, skipping rpm')
       targets = targets.filter((t) => t !== 'rpm')
     }
 
+    const platform = {
+      mac: Platform.MAC,
+      win: Platform.WINDOWS,
+      linux: Platform.LINUX,
+    }[def.os]
+    const arch = { x64: Arch.x64, arm64: Arch.arm64 }[def.arch]
     const artifacts = await electronBuild({
       projectDir: DESKTOP,
-      targets: ELECTRON_PLATFORMS[def.os].createTarget(
-        targets,
-        ELECTRON_ARCHES[def.arch]
-      ),
+      targets: platform.createTarget(targets, arch),
       publish: 'never',
       config: makeConfig(variant, key, {
         identity,
@@ -271,9 +271,24 @@ async function packageVariant(variant: Variant, platforms: PlatformKey[]) {
       }),
     })
 
-    for (const artifact of artifacts) {
+    const files = [...artifacts]
+    if (variant === 'standard') {
+      const yml = path.join(
+        BUILD_ROOT,
+        'builder',
+        variant,
+        DESKTOP_UPDATE_CHANNELS[key].file
+      )
+      if (!existsSync(yml)) throw new Error(`electron-builder wrote no ${yml}`)
+      files.push(yml)
+    }
+    const installer = new RegExp(`\\.(${INSTALLER_EXTENSIONS.join('|')})$`, 'i')
+    for (const artifact of files) {
       const name = path.basename(artifact)
-      if (!INSTALLER_EXT.test(name)) continue
+      // what electron-updater reads: update ymls, blockmaps and the mac zip
+      const update =
+        variant === 'standard' && /\.(yml|blockmap|zip)$/.test(name)
+      if (!installer.test(name) && !update) continue
       const dest = path.join(OUT, name)
       await rename(artifact, dest)
       if (notarytool && name.endsWith('.dmg')) notarizeDmg(dest, notarytool)

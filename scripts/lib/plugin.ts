@@ -20,7 +20,7 @@ const globalPluginShim: Plugin = {
   },
 }
 
-/** Bundle one plugin into the IIFE-returns-class format Taut loads. */
+/** bundles one plugin into the IIFE-returns-class format Taut loads */
 export async function bundlePlugin(
   entrypoint: string,
   debug = false

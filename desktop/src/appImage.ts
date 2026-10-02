@@ -26,7 +26,7 @@ async function copyIcons(appDir: string, dataHome: string) {
   )
 }
 
-/** Resolves once the .desktop file is in place (or there is nothing to do) */
+/** resolves once the .desktop file is in place, or when there's nothing to do */
 export async function installAppImageDesktopEntry(): Promise<void> {
   const { APPIMAGE, APPDIR } = process.env
   if (process.platform !== 'linux' || !APPIMAGE || !APPDIR) return
@@ -46,7 +46,7 @@ export async function installAppImageDesktopEntry(): Promise<void> {
   }
   console.log(`[Taut] Installed ${appsDir}/taut.desktop for ${APPIMAGE}`)
 
-  void copyIcons(APPDIR, dataHome)
+  copyIcons(APPDIR, dataHome)
     .catch((e) => console.warn('[Taut] Failed to copy icons:', e))
     .then(() => run('update-desktop-database', [appsDir]).catch(() => {}))
 }

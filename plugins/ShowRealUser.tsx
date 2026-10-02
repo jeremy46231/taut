@@ -6,13 +6,13 @@ type RelayedMessage = SlackMessage & {
   metadata?: { event_type?: string; event_payload?: Record<string, unknown> }
 }
 
+type SearchResult = { messages?: RelayedMessage[] }
+
 const USER_ID_RE = /^[UW][A-Z0-9]+$/
 /** a forward carries no bot id of its own, so this link is the only clue */
 const SERVICE_RE = /\/services\/(B[A-Z0-9]+)/
 
-type SearchResult = { messages?: RelayedMessage[] }
-
-/** trusted bots that post for someone, and where each records who */
+/** trusted Hack Club bots that post for someone, and where each records who */
 const RELAY_BOTS: Record<string, (msg: RelayedMessage) => unknown> = {
   // at-channel
   B08G06U6SJG: (msg) => msg.metadata?.event_payload?.source_user_id,
@@ -46,7 +46,8 @@ export default class ShowRealUser extends TautPlugin<typeof ShowRealUser> {
   static readonly pluginName = 'Show Real User'
   static readonly description =
     'Shows the user who sent a message via a bot like at-channel'
-  static readonly authors = '<@U06UYA5GMB5>'
+  static readonly authors = ['jeremy'] as const
+  static readonly category = 'messages'
   static readonly defaultConfig = {
     enabled: true,
   }
@@ -56,12 +57,14 @@ export default class ShowRealUser extends TautPlugin<typeof ShowRealUser> {
     ttl: 30 * 24 * 60 * 60 * 1000,
     maxSize: 5000,
   })
-  /** failed lookups, otherwise every store update retries them */
-  private failed = new Set<string>()
-  private refreshTimer: ReturnType<typeof setTimeout> | null = null
+  /** where a relay bot records who */
+  private relayFor(botId: string | undefined) {
+    if (!botId || !this.api.workspace.isHackClub()) return undefined
+    return RELAY_BOTS[botId]
+  }
 
   private relay(msg: RelayedMessage | undefined) {
-    return msg?.bot_id ? RELAY_BOTS[msg.bot_id] : undefined
+    return this.relayFor(msg?.bot_id)
   }
 
   private validId(value: unknown): string | undefined {
@@ -70,44 +73,13 @@ export default class ShowRealUser extends TautPlugin<typeof ShowRealUser> {
       : undefined
   }
 
-  // the store keeps event_type but drops the payload, so fetch it ourselves
-  private async lookUp(key: string) {
-    const [channel, ts] = key.split(':')
-    try {
-      await this.senders.fetch(key, async () => {
-        const res = await this.api.userAPI<{ messages?: RelayedMessage[] }>(
-          'conversations.replies',
-          {
-            channel,
-            ts,
-            limit: '1',
-            inclusive: 'true',
-            include_all_metadata: 'true',
-          },
-          { rateLimitRetries: 3, signal: this.api.signal }
-        )
-        const found = res.messages?.find((msg) => msg.ts === ts)
-        const relay = this.relay(found)
-        return (relay && this.validId(relay(found as RelayedMessage))) ?? null
-      })
-    } catch (err) {
-      this.failed.add(key)
-      this.log('could not look up sender for', key, err)
-      return
-    }
-    // a screenful resolves together, so repaint once they've settled
-    if (this.refreshTimer) clearTimeout(this.refreshTimer)
-    this.refreshTimer = setTimeout(() => {
-      if (!this.api.signal.aborted) this.api.redux.refresh()
-    }, 100)
-  }
-
   /** a forwarded copy of a relayed message, re-credited to the real person */
   private asForwardedBy(att: SlackAttachment): SlackAttachment {
     if (!att?.channel_id || !att.ts) return att
     const botId = SERVICE_RE.exec(att.author_link ?? '')?.[1]
-    if (!botId || !RELAY_BOTS[botId]) return att
-    const user = this.senderOf(att.channel_id, att.ts)
+    const relay = this.relayFor(botId)
+    if (!relay) return att
+    const user = this.senderOf(att.channel_id, att.ts, relay)
     if (!user) return att
     const profile = this.api.members.getCachedMember(user)?.profile
     const forwarded = {
@@ -143,7 +115,7 @@ export default class ShowRealUser extends TautPlugin<typeof ShowRealUser> {
     if (relay) {
       const user =
         this.validId(relay(msg)) ??
-        (channel && ts ? this.senderOf(channel, ts) : undefined)
+        (channel && ts ? this.senderOf(channel, ts, relay) : undefined)
       if (user)
         out = this.api.messages.modifyMessageObject(msg, { sentBy: user })
     }
@@ -172,13 +144,24 @@ export default class ShowRealUser extends TautPlugin<typeof ShowRealUser> {
   }
 
   /** the sender we know for a relayed message, looking it up if we don't */
-  private senderOf(channel: string, ts: string): string | undefined {
+  private senderOf(
+    channel: string,
+    ts: string,
+    relay: (msg: RelayedMessage) => unknown
+  ): string | undefined {
     const key = `${channel}:${ts}`
     const known = this.senders.get(key)
     if (known !== undefined) return known ?? undefined
-    // the cache dedups an in-flight lookup, so a repeat read costs nothing
-    if (!this.failed.has(key)) void this.lookUp(key)
-    return undefined
+    const metadata = this.api.messages.getMessageMetadata(
+      channel,
+      ts,
+      this.api.signal
+    )
+    if (metadata === undefined) return undefined
+    const sender =
+      this.validId(relay({ metadata: metadata ?? undefined })) ?? null
+    this.senders.set(key, sender)
+    return sender ?? undefined
   }
 
   async start() {
@@ -193,6 +176,8 @@ export default class ShowRealUser extends TautPlugin<typeof ShowRealUser> {
       )
     })
     this.api.redux.refresh()
+    // relay bots only count in the Hack Club Slack
+    this.api.workspace.onChange(() => this.api.redux.refresh())
 
     for (const name of [
       'MessageWrapper',

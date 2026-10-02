@@ -1,15 +1,14 @@
 // Lets you see and mention private channels you aren't in (uses the flaron index)
 
-import { TautPlugin } from '$taut'
+import { opt, TautPlugin } from '$taut'
 
 const FLARON = 'https://flaron.halceon.dev'
-// Re-pull the full admin export at most this often
 const EXPORT_TTL = 6 * 60 * 60 * 1000
-// forget a confirmed shadow after this long, so a channel that has since gone
-// public (or that we joined) gets resolved by Slack again
+// forget confirmed shadows so channels gone public or joined get resolved by Slack again
 const SHADOW_TTL = 24 * 60 * 60 * 1000
 // most index entries a single autocomplete query may check against flaron
 const MAX_QUERY_LOOKUPS = 5
+const CHANNEL_ID = /^[CG][A-Z0-9]{8,}$/
 
 type ShadowRecord = { name: string; previousNames?: string[] }
 type Confirmed = ShadowRecord & { ts: number }
@@ -32,40 +31,43 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
   static readonly pluginName = 'Private Channel'
   static readonly description =
     "Lets you see and mention private channels you aren't in (uses the <https://flaron.halceon.dev|flaron> index)"
+  static readonly category = 'app'
+  static readonly hackClubOnly = true
   static readonly defaultConfig = {
     enabled: false,
+    adminKey: opt.secret('flaron admin key, to index every channel in flaron'),
   }
-  static readonly authors = '<@U06UYA5GMB5>'
+  static readonly authors = ['jeremy'] as const
 
-  /**
-   * key: channel id -> every channel flaron knows a name for. flaron reports
-   * `private: true` for public channels too, so these are names only and never
-   * stand in for a channel Slack could fetch itself
-   */
+  /** channel id -> flaron's name, never a stand-in for a channel Slack can fetch since flaron marks public ones private too */
   private index = new Map<string, ShadowRecord>()
-  /** key: channel id -> channels confirmed inaccessible, layered on Slack's cache */
+  /** channel id -> channels confirmed inaccessible, layered on Slack's cache */
   private shadows = new Map<string, Confirmed>()
+  /** last typed id with no known name, so its mention can autocomplete (never saved) */
+  private unnamedId: string | undefined
   /** ids we've already tried to resolve from flaron */
   private resolved = new Set<string>()
+  /** flaron lookups by id, shared by everything resolving the same id */
+  private lookups = new Map<
+    string,
+    Promise<{ ok: boolean; name?: string; isPublic?: boolean }>
+  >()
   /** names we've already tried to resolve from flaron */
   private resolvedNames = new Set<string>()
   /** channel objects we built, so we can tell our own reads from Slack's */
   private synthesized = new WeakSet<object>()
   private exportTs = 0
   private saveTimer: ReturnType<typeof setTimeout> | null = null
+  private snapshot = this.api.storage.store<Snapshot | null>('channels', null)
 
   private get adminKey(): string {
-    const key = this.config.adminKey
-    return typeof key === 'string' ? key.trim() : ''
+    return this.config.adminKey.trim()
   }
 
   async start() {
-    const snapshot = await this.api.storage.get<Snapshot | null>(
-      'channels',
-      null
-    )
+    await this.snapshot.ready
     if (this.api.signal.aborted) return
-    this.loadSnapshot(snapshot)
+    this.loadSnapshot(this.snapshot.get())
 
     this.api.redux.patchSlice<{
       name?: string
@@ -76,9 +78,12 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
       (id, channel) => {
         if (channel?.name && !channel.isNonExistent && !channel.isUnknown)
           return channel
-        // an unconfirmed name only fills in a stub Slack already gave up on
-        // with no entry at all we return nothing, so Slack still fetches
-        const rec = this.shadows.get(id) ?? (channel && this.index.get(id))
+        // an index name only fills a stub Slack gave up on, a missing entry stays missing so Slack still fetches
+        const rec =
+          this.shadows.get(id) ??
+          (channel && this.index.get(id)) ??
+          // the id stands in for the name here, so you at least see the id and not "unknown-channel"
+          (id === this.unnamedId ? { name: id } : undefined)
         if (!rec) return channel
         const shadow = this.api.channels.makeChannelObject({
           id,
@@ -89,14 +94,16 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
         this.synthesized.add(shadow)
         return shadow
       },
-      () => this.shadows.keys()
+      () =>
+        this.unnamedId
+          ? [...this.shadows.keys(), this.unnamedId]
+          : this.shadows.keys()
     )
     this.api.redux.refresh()
 
     this.patchThunks()
     this.patchChannelRendering()
 
-    // If we have an admin key, keep the full export up to date in the background
     if (this.adminKey && Date.now() - this.exportTs > EXPORT_TTL) {
       this.loadExport().catch((err) => this.log('export failed', err))
     }
@@ -104,17 +111,24 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
     this.log('Started')
   }
 
+  async stop() {
+    if (!this.saveTimer) return
+    clearTimeout(this.saveTimer)
+    await this.save()
+  }
+
   private loadSnapshot(snapshot: Snapshot | null) {
     if (!snapshot) return
     this.exportTs = snapshot.index ? (snapshot.ts ?? 0) : 0
+    // older versions saved a channel's id as its name when flaron had none
     for (const [id, rec] of Object.entries(
       snapshot.index ?? snapshot.entries ?? {}
     )) {
-      if (rec?.name) this.index.set(id, rec)
+      if (rec?.name && rec.name !== id) this.index.set(id, rec)
     }
     const now = Date.now()
     for (const [id, rec] of Object.entries(snapshot.confirmed ?? {})) {
-      if (!rec?.name) continue
+      if (!rec?.name || rec.name === id) continue
       this.index.set(id, { name: rec.name, previousNames: rec.previousNames })
       if (now - (rec.ts ?? 0) < SHADOW_TTL) this.shadows.set(id, rec)
     }
@@ -130,18 +144,18 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
   private commit() {
     this.api.redux.refresh()
     if (this.saveTimer) clearTimeout(this.saveTimer)
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null
-      const index: Record<string, ShadowRecord> = {}
-      for (const [id, rec] of this.index) index[id] = rec
-      const confirmed: Record<string, Confirmed> = {}
-      for (const [id, rec] of this.shadows) confirmed[id] = rec
-      void this.api.storage.set<Snapshot>('channels', {
-        ts: this.exportTs,
-        index,
-        confirmed,
-      })
-    }, 1000)
+    this.saveTimer = setTimeout(() => this.save(), 1000)
+  }
+
+  private save() {
+    this.saveTimer = null
+    const index: Record<string, ShadowRecord> = {}
+    for (const [id, rec] of this.index) index[id] = rec
+    const confirmed: Record<string, Confirmed> = {}
+    for (const [id, rec] of this.shadows) confirmed[id] = rec
+    return this.snapshot
+      .set({ ts: this.exportTs, index, confirmed })
+      .catch((err) => this.log('Could not save', err))
   }
 
   private async loadExport() {
@@ -167,8 +181,22 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
     this.log(`indexed ${this.index.size} channel names`)
   }
 
-  /** flaron's record for a channel id */
-  private async fetchFlaron(
+  private fetchFlaron(
+    id: string
+  ): Promise<{ ok: boolean; name?: string; isPublic?: boolean }> {
+    let lookup = this.lookups.get(id)
+    if (!lookup) {
+      lookup = this.requestFlaron(id)
+      this.lookups.set(id, lookup)
+      // only answers are remembered, so a failed request is tried again
+      lookup.then((found) => {
+        if (!found.ok) this.lookups.delete(id)
+      })
+    }
+    return lookup
+  }
+
+  private async requestFlaron(
     id: string
   ): Promise<{ ok: boolean; name?: string; isPublic?: boolean }> {
     try {
@@ -178,6 +206,7 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
       if (this.api.signal.aborted) return { ok: false }
       // flaron has no record of it
       if (!res.ok) return { ok: true }
+      // unknown ids come back as { id, error: 'nonexistent' }
       const data = (await res.json()) as { name?: string; created?: number }
       // public channels come back with full metadata, private ones {id, name}
       if ('created' in data) {
@@ -205,17 +234,47 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
       }
     }
     if (added) this.commit()
-    for (const id of lookups) void this.resolveById(id)
+    for (const id of lookups) this.resolveById(id)
   }
 
-  /** name a channel Slack couldn't resolve, falling back to its bare id */
+  /** name a channel Slack couldn't resolve, unnamed ones keep Slack's bare-id stub */
   private async resolveById(id: string) {
     if (this.resolved.has(id)) return
     this.resolved.add(id)
     const found = await this.fetchFlaron(id)
-    if (!found.ok || found.isPublic || this.api.signal.aborted) return
-    this.confirm(id, { name: found.name || id })
+    if (!found.ok || found.isPublic || !found.name || this.api.signal.aborted)
+      return
+    this.confirm(id, { name: found.name })
     this.commit()
+  }
+
+  /** make a typed channel id mentionable, returns the name to search it by */
+  private async resolveTypedId(id: string): Promise<string | undefined> {
+    const cached = this.api.channels.getCachedChannel(id)
+    if (cached?.name && !cached.isNonExistent && !cached.isUnknown)
+      return cached.name
+    // let Slack try first, so we never shadow a channel it knows about
+    const res = await this.api.redux.dispatchThunk<{ missing?: string[] }>(
+      'fetchAndUpsertChannelsById',
+      { ids: [id] }
+    )
+    if (this.api.signal.aborted) return
+    if (!res?.missing?.includes(id))
+      return this.api.channels.getCachedChannel(id)?.name
+    const known = this.shadows.get(id)?.name
+    if (known) return known
+    const found = await this.fetchFlaron(id)
+    if (!found.ok || found.isPublic || this.api.signal.aborted) return
+    if (found.name) {
+      this.confirm(id, {
+        name: found.name,
+        previousNames: this.index.get(id)?.previousNames,
+      })
+    } else {
+      this.unnamedId = id
+    }
+    this.commit()
+    return found.name ?? id
   }
 
   /** shadow an indexed channel, once flaron confirms Slack can't reach it */
@@ -325,11 +384,13 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
       'autocompleteChannels',
       (original) => (params) => {
         // the composer passes the typed text, sigil and all
-        const q =
+        const raw =
           typeof params?.query === 'string'
-            ? params.query.trim().replace(/^#/, '').toLowerCase()
+            ? params.query.trim().replace(/^#/, '')
             : ''
+        const q = raw.toLowerCase()
         if (!q) return original(params)
+        const typedId = CHANNEL_ID.test(raw) ? raw : undefined
         return (...args: unknown[]) => {
           const result = original(params)(...args)
           return Promise.resolve(result).then((local) => {
@@ -341,24 +402,25 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
 
             const merged = Promise.resolve(slackRemote).then(async (remote) => {
               const base = Array.isArray(remote) ? remote : local
+              if (typedId)
+                return this.searchTypedId(typedId, base, original, params, args)
               // if Slack found an exact match, don't bother looking up flaron
               const covered = base.some((r) => {
                 const name = r?.item?.name || r?.name
                 return typeof name === 'string' && name.toLowerCase() === q
               })
               if (covered) return base
-              // let's check and add flaron shadows
               const added = await this.resolveByName(q)
-              if (!added) return base // still no exact match, resolve
+              if (!added) return base
               // we just added to the store, so re-run the original thunk to let slack's logic find it
               const rerun = await original(params)(...args)
-              // (but no need to await its remote tier, the first run put it in the store)
+              // no need to await its remote tier, the first run put it in the store
               return Array.isArray(rerun)
                 ? this.mergeChannelResults(base, rerun)
                 : base
             })
 
-            // sometimes local is a frozen empty array for some reason, so clone it
+            // local is sometimes a frozen empty array
             const fresh = local.slice() as unknown[] & { promise?: unknown }
             fresh.promise = merged
             return fresh
@@ -366,6 +428,31 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
         }
       }
     )
+  }
+
+  private async searchTypedId(
+    id: string,
+    base: Array<{ item?: { id?: string }; id?: string }>,
+    original: (params: any) => (...args: unknown[]) => unknown,
+    params: { query: string },
+    args: unknown[]
+  ) {
+    if (base.some((r) => (r?.item?.id ?? r?.id) === id)) return base
+    // the autocomplete list waits on this, so it's bounded and can't reject
+    const name = await Promise.race([
+      this.resolveTypedId(id).catch((err) =>
+        this.log('Could not resolve', id, err)
+      ),
+      new Promise<undefined>((resolve) => setTimeout(resolve, 5_000)),
+    ])
+    if (!name) return base
+    const rerun = await original({
+      ...params,
+      query: params.query.replace(id, name),
+    })(...args)
+    if (!Array.isArray(rerun)) return base
+    const match = rerun.filter((r) => (r?.item?.id ?? r?.id) === id)
+    return this.mergeChannelResults(match, base)
   }
 
   /** union two result lists, deduped by channel id (base entries win) */
@@ -409,12 +496,10 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
       isNonExistent?: boolean
       isUnknown?: boolean
     }>('BaseMrkdwnChannel', (Original) => (props) => {
-      const inaccessible =
-        props.isNonExistent ||
-        props.isUnknown ||
-        (props.isPrivate && !props.isMember)
-      if (inaccessible && props.id)
-        return this.renderMissing(props.channelName || props.id)
+      // Slack's stubs carry a placeholder name like "unknown-channel"
+      const stub = props.isNonExistent || props.isUnknown
+      if ((stub || (props.isPrivate && !props.isMember)) && props.id)
+        return this.renderMissing((!stub && props.channelName) || props.id)
 
       return <Original {...props} />
     })
@@ -433,15 +518,32 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
             }
           | undefined
         >((s) => (id ? s.channels?.[id] : undefined))
-        const inaccessible =
-          !!channel &&
-          (channel.isNonExistent ||
-            channel.isUnknown ||
-            (channel.is_private && !channel.is_member))
-        if (inaccessible && id) return this.renderMissing(channel?.name || id)
+        const stub = channel?.isNonExistent || channel?.isUnknown
+        if ((stub || (channel?.is_private && !channel.is_member)) && id)
+          return this.renderMissing((!stub && channel?.name) || id)
 
         return <Original {...props} />
       }
     )
+
+    // Slack labels forwards from a channel it can't see "From a private conversation"
+    this.api.patchComponent<{
+      channelId?: string
+      channelName?: string
+      isChannelNonExistent?: boolean
+      isPrivate?: boolean
+      isMessageNonExistent?: boolean
+    }>('BaseMessageAttachmentSlackMessage', (Original) => (props) => {
+      const id = props.channelId
+      if (!props.isChannelNonExistent || !id) return <Original {...props} />
+      return (
+        <Original
+          {...props}
+          channelName={props.channelName || id}
+          isPrivate={true}
+          isMessageNonExistent={false}
+        />
+      )
+    })
   }
 }

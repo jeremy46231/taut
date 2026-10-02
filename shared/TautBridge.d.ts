@@ -1,52 +1,69 @@
-// Taut Bridge Interface
-// Defines the interface for communication between the app and backends
-// Implemented by ElectronBackend (IPC), extensionBridge (WebExtension storage),
-// and UserscriptBackend (GM_*)
+// Taut Bridge Interface: what each loader gives the app as window.TautBridge
 
-/**
- * Plugin configuration object stored in config.jsonc
- * Each plugin has an `enabled` flag and can have additional custom properties
- */
+/** a plugin's entry in config.json, `enabled` plus its own options */
 export type TautPluginConfig = {
   enabled: boolean
   [key: string]: unknown
 }
 
-/**
- * Paths to Taut directories and files
- * Used by Electron backend for filesystem operations
- */
 export type TautPaths = {
-  /** Root Taut configuration directory */
   tautDir: string
-  /** Directory containing core plugins */
   plugins: string
-  /** Directory containing user plugins */
   userPlugins: string
-  /** Path to config.jsonc file */
   config: string
-  /** Path to user.css file */
   userCss: string
-  /** Path to preload.js file (Electron only) */
-  preloadJs?: string
-  /** Display-friendly versions of paths (with ~ for home dir) */
+  /** the same paths with ~ for the home dir, for showing */
   display: Record<string, string>
 }
 
-/** Cleanup function returned by subscription methods */
+/** how a desktop copy was installed, see desktop/src/installType.ts */
+export type TautInstallType =
+  | 'nsis'
+  | 'homebrew'
+  | 'mac'
+  | 'mac-adhoc'
+  | 'mac-readonly'
+  | 'appimage'
+  | 'nix'
+  | 'deb'
+  | 'apt'
+  | 'rpm'
+  | 'dnf'
+  | 'pacman'
+  | 'embedded'
+  | 'temporary'
+  | 'dev'
+  | 'unknown'
+
+/** desktop installer platform, see scripts/lib/artifacts.ts */
+export type TautDesktopPlatform =
+  | 'mac'
+  | 'mac-x64'
+  | 'win'
+  | 'win-arm'
+  | 'linux'
+  | 'linux-arm'
+
+export type TautInstall = {
+  type: TautInstallType
+  /** the installer that fits this machine */
+  platform: TautDesktopPlatform
+  /** whether this copy installs updates by itself */
+  canSelfUpdate: boolean
+}
+
 export type Unsubscribe = () => void
 
-/** Generic string key/value store scoped to a caller-chosen namespace */
+/** string key/value store scoped to a namespace */
 export type BlobStore = {
-  /** List all keys currently stored in this namespace. */
   list(): Promise<string[]>
-  /** Read a value, or null if not found. */
+  /** null if unset */
   read(key: string): Promise<string | null>
-  /** Write (create or overwrite) a value. @returns true on success. */
+  /** creates or overwrites, true on success */
   write(key: string, value: string): Promise<boolean>
-  /** Delete a single key. @returns true on success. */
+  /** true on success */
   delete(key: string): Promise<boolean>
-  /** Delete every key in this namespace. @returns true on success. */
+  /** deletes every key in the namespace, true on success */
   clear(): Promise<boolean>
 }
 
@@ -58,116 +75,65 @@ export type TautCookie = {
   secure?: boolean
   httpOnly?: boolean
   sameSite?: 'no_restriction' | 'lax' | 'strict' | 'unspecified'
-  /** Expiry in Unix seconds. Omit for a session cookie. */
+  /** unix seconds, omit for a session cookie */
   expirationDate?: number
 }
-
-/**
- * TautBridge interface
- * Abstracts the communication layer between the app and backend.
- * Implemented by each loader: Chrome extension, Firefox extension, Electron preload.
- */
 
 // structured-cloneable
 export type SerialResponse = {
   status: number
   statusText?: string
   headers?: Record<string, string>
-  /**
-   * Body decoded as UTF-8 text. Lossy for binary payloads - prefer
-   * `bodyBase64` when the bridge provides it.
-   */
-  body?: string | null
-  /**
-   * Body as base64-encoded raw bytes (lossless). Added in Electron
-   * bridgeVersion 4; older bridges omit it.
-   */
-  bodyBase64?: string | null
+  /** desktop sends raw bytes since 3.1.0, older loaders a string */
+  body?: string | Uint8Array<ArrayBuffer> | null
 }
 
 export type TautBridge = {
-  /** Which loader is providing this bridge */
   readonly loader:
     | 'chrome-extension'
     | 'firefox-extension'
     | 'electron'
     | 'userscript'
-  /** Semver version string of this loader (e.g. '1.0.0'). */
+  /** semver, like '1.0.0' */
   readonly loaderVersion: string
   readonly embedded?: boolean
+  /** desktop only, older loaders leave it out */
+  readonly install?: TautInstall
+  /** restarts into the update `onUpdateReady` reports, only offered when `install.canSelfUpdate` */
+  restartToUpdate?(): void
+  /** calls back with the version once `restartToUpdate` would install it (right away if it already would), only offered when `install.canSelfUpdate` */
+  onUpdateReady?(cb: (version: string) => void): Unsubscribe
 
-  /**
-   * Monotonic integer version of this loader's bridge API implementation
-   */
+  /** integer version of the bridge API, only goes up */
   readonly bridgeVersion: number
 
-  /**
-   * Called by the app when bridgeVersion is below the required minimum.
-   * The loader should show UI informing the user to update, then return.
-   * After this returns, the app will exit without patching Slack.
-   */
+  /** called instead of loading when bridgeVersion is below the app's MIN_BRIDGE_VERSION, should tell the user to update */
   warnOutdated(): void
 
-  /**
-   * Initialize the backend
-   * Electron: fetches PATHS from main process
-   * Extension: seeds config defaults in WebExtension storage
-   * Userscript: loads config from GM_getValue
-   */
+  /** awaited once before the app reads config (desktop starts its file watchers, the userscript seeds user.css) */
   start(): Promise<void>
 
-  /**
-   * Read the raw config.jsonc text
-   * @returns Promise resolving to config file contents
-   */
   readConfigText(): Promise<string>
 
-  /**
-   * Write raw text to config.jsonc
-   * @param text - New config file contents
-   * @returns Promise resolving to true on success
-   */
+  /** true on success */
   writeConfigText(text: string): Promise<boolean>
 
-  /**
-   * Subscribe to config text changes (for editor sync)
-   * @param cb - Callback receiving new config text
-   * @returns Unsubscribe function
-   */
   onConfigTextChange(cb: (text: string) => void): Unsubscribe
 
-  /**
-   * Read the raw user.css text
-   * @returns Promise resolving to user.css contents
-   */
   readUserCss(): Promise<string>
 
-  /**
-   * Write raw text to user.css
-   * @param text - New CSS contents
-   * @returns Promise resolving to true on success
-   */
+  /** true on success */
   writeUserCss(text: string): Promise<boolean>
 
-  /**
-   * Subscribe to user.css changes
-   * @param cb - Callback receiving new CSS text
-   * @returns Unsubscribe function
-   */
   onUserCssChange(cb: (css: string) => void): Unsubscribe
 
-  /**
-   * CORS-bypassing fetch.
-   */
+  /** fetch that bypasses CORS */
   fetch(
     input: RequestInfo | URL,
     init?: RequestInit
   ): Promise<Response | SerialResponse>
 
-  /**
-   * Cookie read/write outside the page sandbox, or `null` if the loader can't
-   * do it (e.g. a userscript manager without `GM_cookie`).
-   */
+  /** cookie access outside the page sandbox, null when the loader can't (like a userscript manager without `GM_cookie`) */
   readonly cookies: null | {
     get(details: { url: string; name: string }): Promise<TautCookie | null>
     getAll(details: {
@@ -175,38 +141,30 @@ export type TautBridge = {
       domain?: string
       name?: string
     }): Promise<TautCookie[]>
-    /** `url` selects the cookie store and provides default domain/path. */
+    /** `url` picks the cookie store and the default domain and path */
     set(cookie: TautCookie & { url: string }): Promise<boolean>
     remove(details: { url: string; name: string }): Promise<boolean>
   }
 
-  /**
-   * Taut-private key/value store for secrets (e.g. saved account tokens),
-   * backed by GM storage / `chrome.storage.local` / a file in `tautDir`. Kept
-   * out of `config.jsonc` (user-editable, shown in the editor).
-   * @returns the stored string, or `null` if unset.
-   */
+  /** private store for secrets like account tokens, kept out of config.json, stored encrypted with the OS keychain if possible, null if unset */
   readSecret(key: string): Promise<string | null>
-  /** Write a secret. @returns true on success. Added in bridgeVersion 2. */
+  /** true on success, added in bridgeVersion 2 */
   writeSecret(key: string, value: string): Promise<boolean>
+  /** true on success, older loaders lack it */
+  deleteSecret?(key: string): Promise<boolean>
 
-  /** Read-write store of pre-compiled user plugin code, keyed by plugin id. */
+  /** compiled user plugin code by plugin id */
   readonly userPlugins: {
     list(): Promise<string[]>
     read(id: string): Promise<string | null>
     write(id: string, code: string): Promise<boolean>
     delete(id: string): Promise<boolean>
-    /** Subscribe to external user plugin changes */
     onChange(cb: (id: string, code: string | null) => void): Unsubscribe
   }
 
-  /** Get a BlobStore scoped to a specific namespace */
   blobStore(namespace: string): BlobStore
 
-  /**
-   * Paths to Taut directories and files
-   * TautPaths object in Electron, or null in extension/userscript mode
-   */
+  /** desktop only, null in the extensions and userscript */
   PATHS: TautPaths | null
 }
 

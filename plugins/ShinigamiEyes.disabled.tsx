@@ -1,5 +1,5 @@
-// Shows Hackatime trust level indicators next to user names in Slack
-// Broken because the Hackatime API changed
+// Displays Hackatime trust level indicators next to user names in Slack
+// broken since the Hackatime API changed
 
 import { opt, TautPlugin } from '$taut'
 
@@ -37,7 +37,9 @@ export default class ShinigamiEyes extends TautPlugin<typeof ShinigamiEyes> {
   static readonly pluginName = 'Shinigami Eyes'
   static readonly description =
     'Displays Hackatime trust level indicators next to user names in Slack'
-  static readonly authors = '<@U07VC9705D4>, <@U046VA0KR8R>, <@U06UYA5GMB5>'
+  static readonly authors = ['miggy', 'scooter', 'jeremy'] as const
+  static readonly category = 'people'
+  static readonly hackClubOnly = true
   static readonly defaultConfig = {
     enabled: false,
     apiToken: opt('', 'https://hackatime.hackclub.com/admin/admin_api_keys'),
@@ -63,9 +65,7 @@ export default class ShinigamiEyes extends TautPlugin<typeof ShinigamiEyes> {
 
     const MrkdwnElement = this.api.elements.MrkdwnElement
 
-    // Only patch message sender to add trust level emoji if enabled in config
     if (this.config.nameEmojis !== false) {
-      // Patch Message component to add trust level CSS classes
       this.api.patchComponent<{
         botId?: string
         userId?: string
@@ -84,7 +84,6 @@ export default class ShinigamiEyes extends TautPlugin<typeof ShinigamiEyes> {
         React.useEffect(() => {
           if (!userId || isBotMessage) return
 
-          // If we have a cached status, use it
           if (this.trustLevels[userId] !== undefined) {
             if (trustLevel !== this.trustLevels[userId]) {
               setTrustLevel(this.trustLevels[userId])
@@ -106,7 +105,6 @@ export default class ShinigamiEyes extends TautPlugin<typeof ShinigamiEyes> {
       })
     }
 
-    // Patch MemberProfileHoverCard to show trust level and audit logs
     this.api.patchComponent<{
       memberId: string
       header?: React.ReactNode
@@ -121,7 +119,6 @@ export default class ShinigamiEyes extends TautPlugin<typeof ShinigamiEyes> {
         )
         const [isLoading, setIsLoading] = React.useState(false)
 
-        // Fetch audit logs when hover card opens (for trust levels 1 and 3)
         React.useEffect(() => {
           if (trustLevel !== 1 && trustLevel !== 3) return
 
@@ -164,7 +161,6 @@ export default class ShinigamiEyes extends TautPlugin<typeof ShinigamiEyes> {
               {emoji} Trust Level: {color ?? 'Unknown'}
             </div>
 
-            {/* Show audit logs for trust levels 1 and 3 */}
             {(trustLevel === 1 || trustLevel === 3) && (
               <div style={{ marginTop: '8px' }}>
                 {isLoading && (
@@ -238,7 +234,6 @@ export default class ShinigamiEyes extends TautPlugin<typeof ShinigamiEyes> {
           </div>
         )
 
-        // Merge with existing header if one exists
         const newHeader = (
           <>
             {props.header}
@@ -250,7 +245,6 @@ export default class ShinigamiEyes extends TautPlugin<typeof ShinigamiEyes> {
       }
     )
 
-    // Generate CSS for each trust level emoji
     const emojiStyles = [...TRUST_LEVEL_EMOJIS.entries()]
       .map(([level, emoji]) => {
         return `
@@ -269,8 +263,6 @@ export default class ShinigamiEyes extends TautPlugin<typeof ShinigamiEyes> {
 
     this.log('Loaded successfully!')
   }
-
-  // API Fetching
 
   async fetchTrustLevelsFromAPI(): Promise<void> {
     const apiToken = this.config.apiToken

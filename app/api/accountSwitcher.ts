@@ -1,27 +1,3 @@
-// Taut Account Switcher
-// Switches between multiple Slack accounts in the same workspace without going
-// through Slack's login flow
-
-// tw: ai blurb:
-// - A Slack web session is authenticated by an `xoxc` token (POST body of
-//   every API call, stored in localStorage `localConfig_v2`) PLUS the `d`
-//   (xoxd) cookie. The server binds the two: a token is rejected unless the
-//   matching cookie is present. The cookie is HttpOnly, so only the loader
-//   (via `bridge.cookies`) can write it.
-// - Two same-workspace sessions coexist server-side as long as neither login
-//   revoked the other. So we capture each account's localConfig team entry +
-//   `d` cookie when it is live, and to switch we re-apply a stored pair: set
-//   the `d` cookie and write the team entry back into `localConfig_v2`.
-// - We store the WHOLE localConfig team object, not a subset: enterprise/grid
-//   boot needs fields like `url` (the API host) to route requests, dropping
-//   them yields `api_missing_host_error`.
-// - Writing `localConfig_v2` from the live page is futile: Slack's unload
-//   flush rewrites it from its in-memory Redux state on navigation. So the
-//   switch stashes the desired account in a localStorage handoff key and
-//   reloads; `applyPendingSwitch()` re-applies it synchronously at the very
-//   start of the next boot, before Slack reads `localConfig_v2`. The cookie,
-//   unlike localStorage, persists across the reload and needs no re-apply.
-
 import type { TautCookie } from '../../shared/TautBridge'
 import type { NormalizedBridge } from '../bridgeCompat'
 import {
@@ -31,36 +7,29 @@ import {
 } from '../slack/localConfig'
 
 const SLACK_URL = 'https://app.slack.com'
-const COOKIE_DOMAIN = '.slack.com'
-const SECRET_KEY = 'accounts' // bridge secret: Record<userId, StoredAccount>
-const PENDING_SWITCH_KEY = 'taut:pendingSwitch' // localStorage handoff key
-
-// Slack's per-session cookies, all must be cleared for a new account to be logged in
-const SESSION_COOKIES = ['d', 'd-s', 'uc']
+export const SECRET_KEY = 'accounts'
 
 export type StoredAccount = {
   userId: string
   teamId: string
+  // the whole entry, enterprise boot needs `url` (the API host) or fails with `api_missing_host_error`
   team: LocalConfigTeam
+  // the `d` cookie, the server rejects the team's xoxc token without it
   xoxd: string
   updatedAt: number
 }
 
-/**
- * Must be called at the very top of bootstrap(), before any await and before
- * Slack's webpack runs, so the token is in place when Slack boots
- * Slack saves the token to localStorage in the unload handler, so we have to
- * set it now
- */
+/** call at the very top of bootstrap(), before any await and before Slack's webpack reads `localConfig_v2` */
 export function applyPendingSwitch(): void {
   let pendingJson: string | null
   try {
-    pendingJson = localStorage.getItem(PENDING_SWITCH_KEY)
+    // the account handed over by `switchTo` for this page load
+    pendingJson = localStorage.getItem('taut:pendingSwitch')
   } catch {
     return
   }
   if (!pendingJson) return
-  localStorage.removeItem(PENDING_SWITCH_KEY)
+  localStorage.removeItem('taut:pendingSwitch')
 
   let account: StoredAccount
   try {
@@ -85,7 +54,7 @@ export function applyPendingSwitch(): void {
 }
 
 export class AccountSwitcher {
-  /** Whether this loader can switch accounts at all (needs cookie access). */
+  /** whether this loader can write the HttpOnly `d` cookie, which switching needs */
   readonly supported: boolean
   private readonly cookies: NormalizedBridge['cookies']
 
@@ -106,22 +75,18 @@ export class AccountSwitcher {
     return this.bridge.writeSecret(SECRET_KEY, JSON.stringify(accounts))
   }
 
-  /** All saved accounts. */
   async list(): Promise<StoredAccount[]> {
     return Object.values(await this.load())
   }
 
-  /** Remove a saved account from the store (does not touch the live session). */
+  /** removes a saved account without touching the live session */
   async forget(userId: string): Promise<void> {
     const accounts = await this.load()
     delete accounts[userId]
     await this.save(accounts)
   }
 
-  /**
-   * Validate every saved account against the server and drop any that no longer
-   * authenticate
-   */
+  /** drops saved accounts that fail auth.test, ones that can't be checked are in neither list */
   async validate(): Promise<{ kept: string[]; dropped: string[] }> {
     const accounts = await this.load()
     const checks = await Promise.all(
@@ -143,7 +108,6 @@ export class AccountSwitcher {
     }
   }
 
-  /** auth.test a stored pair via a custom Cookie header */
   private async checkAuth(
     account: StoredAccount
   ): Promise<'valid' | 'invalid' | 'unknown'> {
@@ -167,7 +131,6 @@ export class AccountSwitcher {
     }
   }
 
-  /** Capture the currently-active account into the store */
   async captureCurrent(): Promise<StoredAccount | null> {
     if (!this.supported || !this.cookies) return null
     const localConfig = readLocalConfig()
@@ -191,10 +154,7 @@ export class AccountSwitcher {
     return account
   }
 
-  /**
-   * Switch to a previously-saved account: set its `d` cookie now, stash the
-   * account for `applyPendingSwitch()` (handles the team entry), then reload
-   */
+  /** works while neither account's login has revoked the other's session */
   async switchTo(userId: string): Promise<void> {
     if (!this.supported || !this.cookies)
       throw new Error('Account switching is not supported by this loader')
@@ -202,14 +162,13 @@ export class AccountSwitcher {
     if (!account?.team?.token)
       throw new Error(`No usable saved account for ${userId}`)
 
-    // Keep the account we're leaving fresh before we go.
     await this.captureCurrent()
 
     const cookie: TautCookie & { url: string } = {
       url: SLACK_URL,
       name: 'd',
       value: account.xoxd,
-      domain: COOKIE_DOMAIN,
+      domain: '.slack.com',
       path: '/',
       secure: true,
       httpOnly: true,
@@ -219,13 +178,12 @@ export class AccountSwitcher {
     const ok = await this.cookies.set(cookie)
     if (!ok) throw new Error('Failed to set session cookie')
 
-    localStorage.setItem(PENDING_SWITCH_KEY, JSON.stringify(account))
+    // Slack's unload flush rewrites `localConfig_v2` from redux, so the next boot writes the team entry
+    localStorage.setItem('taut:pendingSwitch', JSON.stringify(account))
     location.assign(`${SLACK_URL}/client/${account.teamId}`)
   }
 
-  /**
-   * Add a new account: save the current one, wipe it, reload to login
-   */
+  /** saves the current account, removes it from this browser and reloads to Slack's login */
   async addAccount(): Promise<void> {
     if (!this.supported || !this.cookies)
       throw new Error('Account switching is not supported by this loader')
@@ -235,12 +193,11 @@ export class AccountSwitcher {
     const teamId = localConfig.lastActiveTeamId
     const domain = saved?.team.domain ?? getActiveTeam(localConfig)?.domain
 
-    // kill all session cookies
-    for (const name of SESSION_COOKIES) {
+    // Slack's per-session cookies, all must go for a new account to log in
+    for (const name of ['d', 'd-s', 'uc']) {
       await this.cookies.remove({ url: SLACK_URL, name })
     }
 
-    // drop the localConfig team
     if (teamId && localConfig.teams?.[teamId]) {
       delete localConfig.teams[teamId]
       localConfig.orderedTeamIds = (localConfig.orderedTeamIds ?? []).filter(

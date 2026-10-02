@@ -7,10 +7,15 @@ export type SerialFetchInit = {
   body?: string
   headers?: Record<string, string>
 }
+/** what the page gets from the content script */
 export type SerialFetchResponse = {
   status: number
   statusText: string
   headers: Record<string, string>
+  body: Uint8Array<ArrayBuffer>
+}
+/** Chrome's background -> content script form, runtime messaging there is JSON so the body is base64 */
+export type WireFetchResponse = Omit<SerialFetchResponse, 'body'> & {
   body: string
 }
 
@@ -21,6 +26,7 @@ export type ExtensionRpc = {
   writeUserCss: (text: string) => Promise<boolean>
   readSecret: (key: string) => Promise<string | null>
   writeSecret: (key: string, value: string) => Promise<boolean>
+  deleteSecret: (key: string) => Promise<boolean>
   listUserPlugins: () => Promise<string[]>
   readUserPlugin: (id: string) => Promise<string | null>
   writeUserPlugin: (id: string, code: string) => Promise<boolean>
@@ -42,6 +48,11 @@ export type ExtensionRpc = {
   cookieSet: (cookie: TautCookie & { url: string }) => Promise<boolean>
   cookieRemove: (details: { url: string; name: string }) => Promise<boolean>
   fetch: (url: string, init: SerialFetchInit) => Promise<SerialFetchResponse>
+}
+
+/** Chrome's background side of ExtensionRpc, with fetch in its wire form */
+export type BackgroundRpc = Omit<ExtensionRpc, 'fetch'> & {
+  fetch: (url: string, init: SerialFetchInit) => Promise<WireFetchResponse>
 }
 
 export type RpcMethod = keyof ExtensionRpc

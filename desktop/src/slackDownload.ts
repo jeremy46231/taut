@@ -1,6 +1,11 @@
 // Taut Desktop Slack downloader
 
-import { createWriteStream, existsSync, readFileSync } from 'node:fs'
+import {
+  createWriteStream,
+  existsSync,
+  readFileSync,
+  renameSync,
+} from 'node:fs'
 import { access, mkdir, readdir, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { Readable, Transform } from 'node:stream'
@@ -10,7 +15,13 @@ import { fileURLToPath } from 'node:url'
 import { createGunzip } from 'node:zlib'
 import { BrowserWindow, dialog, net } from 'electron'
 import tar from 'tar-stream'
-import { downloadedNativesDir } from './nativeModules.js'
+import { compareVersions } from '../../shared/updates'
+import { installerArch } from './installType.js'
+import {
+  type Arch,
+  downloadedNativesDir,
+  slackNativeArches,
+} from './nativeModules.js'
 import { configDir } from './paths.js'
 import { extractDebDir, extractZipDir } from './slackArchive.js'
 
@@ -20,17 +31,47 @@ export const SLACK_VERSION = __TAUT_SLACK_VERSION__
 const CDN = 'https://downloads.slack-edge.com/desktop-releases'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const slackRoot = () => path.join(configDir(), 'slack')
-const resourcesDir = () => path.join(slackRoot(), SLACK_VERSION)
+/** the Slack build a Taut of `arch` runs, arm64 linux runs the x64 deb with arm64 natives swapped in */
+export const slackArch = (arch: string = process.arch): Arch =>
+  arch === 'arm64' && process.platform !== 'linux' ? 'arm64' : 'x64'
 
-export function cachedSlackAsar(): string | undefined {
-  const asar = path.join(resourcesDir(), 'app.asar')
+const slackRoot = () => path.join(configDir(), 'slack')
+const cacheName = (version: string, arch: string) =>
+  `${version}-${slackArch(arch)}`
+
+/** @param arch of the Taut that will load it */
+export function cachedSlackAsar(
+  version = SLACK_VERSION,
+  arch: string = process.arch
+): string | undefined {
+  const asar = path.join(slackRoot(), cacheName(version, arch), 'app.asar')
+  if (!existsSync(asar)) adoptUnsuffixedCache(version)
   return existsSync(asar) ? asar : undefined
 }
 
-function release(): { url: string; resources: string; kind: 'zip' | 'deb' } {
-  const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
-  const v = SLACK_VERSION
+// caches were named by version alone until the arch was added, remove once those are gone
+function adoptUnsuffixedCache(version: string) {
+  const dir = path.join(slackRoot(), version)
+  if (!existsSync(path.join(dir, 'app.asar'))) return
+  const arches = slackNativeArches(dir)
+  if (!arches || arches.size === 0) return
+  const arch = arches.has(slackArch()) ? slackArch() : [...arches][0]
+  try {
+    renameSync(dir, path.join(slackRoot(), `${version}-${arch}`))
+    console.log(`[Taut] Slack cache ${version} is ${arch}`)
+  } catch (err) {
+    console.warn(`[Taut] Couldn't rename Slack cache ${version}:`, err)
+  }
+}
+
+function release(
+  v: string,
+  arch: Arch
+): {
+  url: string
+  resources: string
+  kind: 'zip' | 'deb'
+} {
   switch (process.platform) {
     case 'darwin':
       return {
@@ -80,18 +121,40 @@ async function download(
   )
 }
 
-/** Download and unpack the pinned Slack. Needs the app to be ready (uses net). */
-export async function downloadSlack(
-  onProgress: (p: Progress) => void = () => {}
+const downloads = new Map<string, Promise<void>>()
+
+/** needs the app to be ready (uses net), `arch` is of the Taut that will load it */
+export function downloadSlack(
+  onProgress: (p: Progress) => void = () => {},
+  version = SLACK_VERSION,
+  arch: string = process.arch
+): Promise<void> {
+  const name = cacheName(version, arch)
+  let running = downloads.get(name)
+  if (!running) {
+    running = fetchSlack(name, version, arch, onProgress).finally(() =>
+      downloads.delete(name)
+    )
+    downloads.set(name, running)
+  }
+  return running
+}
+
+async function fetchSlack(
+  name: string,
+  version: string,
+  arch: string,
+  onProgress: (p: Progress) => void
 ) {
-  const { url, resources, kind } = release()
+  if (cachedSlackAsar(version, arch)) return
+  const { url, resources, kind } = release(version, slackArch(arch))
   const root = slackRoot()
-  const archive = path.join(root, `${SLACK_VERSION}.download`)
-  const work = path.join(root, `${SLACK_VERSION}.partial`)
+  const archive = path.join(root, `${name}.download`)
+  const work = path.join(root, `${name}.partial`)
   await mkdir(root, { recursive: true })
   await rm(work, { recursive: true, force: true })
 
-  console.log(`[Taut] Downloading Slack ${SLACK_VERSION} from ${url}`)
+  console.log(`[Taut] Downloading Slack ${version} from ${url}`)
   await download(url, archive, onProgress)
   onProgress({ phase: 'unpack' })
   await (kind === 'deb' ? extractDebDir : extractZipDir)(
@@ -102,22 +165,42 @@ export async function downloadSlack(
   if (!existsSync(path.join(work, 'app.asar'))) {
     throw new Error(`${url} did not contain ${resources}/app.asar`)
   }
-  await downloadSlackNatives(work).catch((err) =>
+  await downloadSlackNatives(work, arch).catch((err) =>
     console.warn('[Taut] arm64 slack-desktop-utils download failed:', err)
   )
-  await rename(work, resourcesDir())
+  await rename(work, path.join(root, name))
   await rm(work, { recursive: true, force: true })
   await rm(archive, { force: true })
-  for (const entry of await readdir(root)) {
-    if (entry !== SLACK_VERSION) {
-      await rm(path.join(root, entry), { recursive: true, force: true })
-    }
-  }
-  console.log(`[Taut] Slack ${SLACK_VERSION} ready`)
+  await pruneSlackCache(name)
+  console.log(`[Taut] Slack ${name} ready`)
 }
 
-// slack publishes N-API prebuilds of its proprietary module for linux arm64
-// too, at the node-pre-gyp location described in its package.json
+// newer cached Slacks stay, they were fetched for an update not installed yet, in the arch it will run
+export async function pruneSlackCache(keep?: string) {
+  const root = slackRoot()
+  let entries: string[]
+  try {
+    entries = await readdir(root)
+  } catch {
+    return
+  }
+  const arches = new Set([slackArch(), slackArch(installerArch())])
+  for (const entry of entries) {
+    const match =
+      /^(\d+(?:\.\d+)*)(?:-(x64|arm64))?(\.partial|\.download)?$/.exec(entry)
+    if (!match || entry === keep) continue
+    const [, version, arch, unfinished] = match
+    const age = compareVersions(version, SLACK_VERSION)
+    // an unsuffixed cache that still fit was adopted when it was looked up
+    const stale = arch
+      ? age < 0 || !arches.has(arch as Arch)
+      : age <= 0 || !!unfinished
+    if (stale)
+      await rm(path.join(root, entry), { recursive: true, force: true })
+  }
+}
+
+// Slack publishes linux arm64 N-API prebuilds of its proprietary module at the node-pre-gyp location in its package.json
 function slackDesktopUtilsPrebuildUrl(slackResourcesPath: string): string {
   const pkg = JSON.parse(
     readFileSync(
@@ -147,11 +230,12 @@ function slackDesktopUtilsPrebuildUrl(slackResourcesPath: string): string {
   return `${binary.production_host}/${name}`
 }
 
-/**
- * On arm64 linux, fetch the arm64 slack-desktop-utils next to the given Slack
- */
-export async function downloadSlackNatives(slackResourcesPath: string) {
-  if (process.platform !== 'linux' || process.arch !== 'arm64') return
+/** on arm64 linux, fetches the arm64 slack-desktop-utils next to the given Slack */
+export async function downloadSlackNatives(
+  slackResourcesPath: string,
+  arch: string = process.arch
+) {
+  if (process.platform !== 'linux' || arch !== 'arm64') return
   const dir = downloadedNativesDir(slackResourcesPath)
   try {
     await access(path.join(dir, 'slackdesktoputils.node'))
@@ -187,7 +271,7 @@ export async function downloadSlackNatives(slackResourcesPath: string) {
 
 const mb = (bytes: number) => (bytes / 1e6).toFixed(0)
 
-/** First launch, can't find Slack on disk, download with progress window */
+/** for first launch with no Slack on disk */
 export async function downloadSlackWithWindow() {
   const win = new BrowserWindow({
     width: 380,

@@ -1,9 +1,6 @@
-// Taut Modal API
-// Gives access to use Slack's modal system
-
 import { reactPromise } from '../slack/react'
 import { getReduxStore } from '../slack/redux'
-import { waitForExport } from '../slack/webpack'
+import { byMeta, waitForExport } from '../slack/webpack'
 import { elementsAPIPromise } from './elements'
 
 type RawModalHandle = { close: () => void; render: (props: unknown) => void }
@@ -44,13 +41,10 @@ export interface AlertOptions {
   closeText?: string
 }
 
-/**
- * Build the convenience dialog helpers over a given `openModal`
- */
 export function dialogHelpersFor(
   openModal: (options: OpenModalOptions) => ModalHandle | null
 ) {
-  /** Show a confirm/cancel dialog; resolves `true` if confirmed, `false` on cancel or dismissal. */
+  /** resolves `true` if confirmed, `false` on cancel or dismissal */
   function confirm(options: ConfirmOptions): Promise<boolean> {
     return new Promise((resolve) => {
       let settled = false
@@ -73,7 +67,7 @@ export function dialogHelpersFor(
     })
   }
 
-  /** Show a dialog with a title/body and a single close button; resolves once the user dismisses it. */
+  /** a dialog with one close button, resolves once the user dismisses it */
   function alert(options: AlertOptions): Promise<void> {
     return new Promise((resolve) => {
       let settled = false
@@ -102,11 +96,7 @@ export const modalAPIPromise = (async () => {
   const elements = await elementsAPIPromise
 
   let openModalThunk: OpenModalThunk | undefined
-  void waitForExport<OpenModalThunk>(
-    (e: unknown) =>
-      typeof e === 'function' &&
-      (e as { meta?: { name?: string } }).meta?.name === 'openModal'
-  ).then((found) => {
+  waitForExport<OpenModalThunk>(byMeta('openModal')).then((found) => {
     openModalThunk = found
   })
 

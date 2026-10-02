@@ -1,5 +1,4 @@
 // Preload for the Taut options window
-// Exposes tautPrefs API to the options page via contextBridge
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('tautPrefs', {

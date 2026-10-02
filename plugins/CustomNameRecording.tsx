@@ -8,9 +8,6 @@ type AudioButtonProps = {
   onFileUploadEnd?: () => void
 }
 
-const FILE_NAME = 'audio_name_pronunciation.mp3'
-const SUBTYPE = 'slack_name_pronunciation'
-
 /** the mp3 they chose, or null if they closed the picker */
 function pickAudio(): Promise<File | null> {
   return new Promise((resolve) => {
@@ -50,7 +47,8 @@ export default class CustomNameRecording extends TautPlugin<
   static readonly pluginName = 'Custom Name Recording'
   static readonly description =
     'Uploads an audio file as your name recording, instead of recording one'
-  static readonly authors = '<@U06UYA5GMB5>'
+  static readonly authors = ['jeremy'] as const
+  static readonly category = 'people'
   static readonly defaultConfig = {
     enabled: true,
   }
@@ -133,9 +131,11 @@ export default class CustomNameRecording extends TautPlugin<
       const audio = await context.decodeAudioData(await source.arrayBuffer())
       const bars = Math.min(100, Math.max(20, Math.round(audio.duration * 5)))
       return Object.assign(
-        new File([source], FILE_NAME, { type: 'audio/mpeg' }),
+        new File([source], 'audio_name_pronunciation.mp3', {
+          type: 'audio/mpeg',
+        }),
         {
-          subtype: SUBTYPE,
+          subtype: 'slack_name_pronunciation',
           duration: audio.duration,
           audio_wave_samples: peaks(audio.getChannelData(0), bars),
         }
@@ -143,7 +143,7 @@ export default class CustomNameRecording extends TautPlugin<
     } catch {
       throw new Error('That file could not be read as audio')
     } finally {
-      void context.close()
+      context.close()
     }
   }
 }

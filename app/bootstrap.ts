@@ -1,5 +1,4 @@
-// Taut Bootstrap
-// Wires up the backend, config store, and starts plugins
+// Taut Bootstrap: wires up the bridge and config store, then starts plugins
 
 import type { BlobStore } from '../shared/TautBridge'
 import { applyPendingSwitch } from './api/accountSwitcher'
@@ -8,17 +7,27 @@ import { installResizeGate } from './api/resize'
 import { Telemetry } from './api/telemetry'
 import type { NormalizedBridge } from './bridgeCompat'
 import { bundledPlugins } from './bundledData'
+// remove once users have moved to the pinned chrome extension
+import { startChromeMigrationMirror } from './chromeMigration'
 import { ConfigStore } from './configStore'
+import { startUpdateCheck } from './loaderUpdate'
 import { PluginManager } from './pluginManager'
+import { consumeSafeMode } from './safeMode'
 import { addSettingsTab } from './settings'
+import {
+  applySavedExperiments,
+  switchToLiveExperiments,
+} from './slack/experiments'
 import { addPatchTargets, patchTargets } from './slack/react'
+import { WhatsNew } from './whatsNew'
+import { addWhatsNewButton } from './whatsNewButton'
 
 const global = globalThis as any
 
-/** Keeps the component names that have ever been patched across sessions */
+/** keeps the component names that have ever been patched across sessions */
 async function syncPatchTargets(blob: BlobStore) {
   patchTargets.subscribe(() => {
-    void blob.write('names', JSON.stringify([...patchTargets.get()]))
+    blob.write('names', JSON.stringify([...patchTargets.get()]))
   })
   try {
     const raw = await blob.read('names')
@@ -28,9 +37,6 @@ async function syncPatchTargets(blob: BlobStore) {
   }
 }
 
-/**
- * Main entry point for Taut initialization.
- */
 export async function bootstrap(bridge: NormalizedBridge): Promise<void> {
   console.log('[Taut] Bootstrap starting...')
 
@@ -38,34 +44,43 @@ export async function bootstrap(bridge: NormalizedBridge): Promise<void> {
   applyPendingSwitch()
   installResizeGate()
 
+  const safeMode = consumeSafeMode()
+  if (safeMode) console.warn('[Taut] Safe mode: plugins and user CSS are off')
+  // slack reads many experiments while booting, before plugins start
+  else applySavedExperiments()
+
   await bridge.start()
-  void syncPatchTargets(bridge.blobStore('patch_targets'))
+  if (!safeMode) syncPatchTargets(bridge.blobStore('patch_targets'))
 
   const configStore = new ConfigStore(bridge)
   await configStore.init()
   console.log('[Taut] ConfigStore initialized', configStore)
   global.configStore = configStore
 
-  setStyle(configStore.getUserCssText(), 'user')
-  configStore.onUserCssChange((css) => setStyle(css, 'user'))
+  const whatsNew = new WhatsNew(bridge)
+  whatsNew.init(Object.keys(configStore.getConfig().plugins).length === 0)
 
-  // Initialize plugins
-  const pluginManager = new PluginManager(bridge, configStore)
+  if (!safeMode) {
+    setStyle(configStore.getUserCssText(), 'user')
+    configStore.onUserCssChange((css) => setStyle(css, 'user'))
+  }
+
+  const pluginManager = new PluginManager(bridge, configStore, safeMode)
   global.__tautPluginManager = pluginManager
+  addWhatsNewButton({ whatsNew, pluginManager, configStore })
 
-  // Load all bundled plugins first
+  // before user plugins, so a built-in plugin keeps its id when a user plugin claims it too
   await Promise.all(
     Object.values(bundledPlugins).map((code) =>
       pluginManager.loadPluginCode(code, 'bundled')
     )
   )
 
-  // Load user plugins and keep in sync
   const userPlugins = bridge.userPlugins
   const userPluginGenerations = new Map<string, number>()
   userPlugins.onChange((id, code) => {
     userPluginGenerations.set(id, (userPluginGenerations.get(id) ?? 0) + 1)
-    void pluginManager.applyUserPluginChange(id, code)
+    pluginManager.applyUserPluginChange(id, code)
   })
   try {
     const ids = await userPlugins.list()
@@ -82,8 +97,22 @@ export async function bootstrap(bridge: NormalizedBridge): Promise<void> {
     console.error('[Taut] Failed to load user plugins:', err)
   }
 
-  await addSettingsTab(pluginManager, configStore)
+  // plugins loaded, so stop using the cached experiment settings
+  if (!safeMode) switchToLiveExperiments()
+
+  await configStore.removeDefaults(
+    new Map(
+      [...pluginManager.plugins].flatMap(([id, { PluginClass }]) =>
+        PluginClass ? [[id, PluginClass.defaultConfig]] : []
+      )
+    )
+  )
+
+  await addSettingsTab(pluginManager, configStore, whatsNew)
   new Telemetry(bridge, configStore).start()
+  startUpdateCheck(bridge)
+  // remove once users have moved to the pinned chrome extension
+  startChromeMigrationMirror(bridge, pluginManager)
 
   console.log('[Taut] Taut initialized')
 }

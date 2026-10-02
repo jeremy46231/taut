@@ -1,5 +1,3 @@
-// Reads Slack's localConfig_v2 client state from localStorage
-
 export type LocalConfigTeam = {
   id?: string
   name?: string
@@ -25,7 +23,7 @@ export function readLocalConfig(): LocalConfig {
   }
 }
 
-/** The localConfig team entry for the currently-active workspace, if any */
+/** the localConfig team entry for the active workspace */
 export function getActiveTeam(
   config: LocalConfig = readLocalConfig()
 ): LocalConfigTeam | undefined {

@@ -1,6 +1,3 @@
-// Taut App Helpers
-// Shared utilities for the Taut app
-
 export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true
   if (a == null || b == null) return false
@@ -23,10 +20,7 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 export const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-/**
- * Runs `attempt` until it returns a value, waiting between tries with
- * exponential backoff and full jitter
- */
+/** runs `attempt` up to `tries` times until it returns a value, with exponential backoff and full jitter */
 export async function retry<T>(
   attempt: () => Promise<T | undefined>,
   { tries = 3, baseMs = 1000, maxMs = 30_000 } = {}

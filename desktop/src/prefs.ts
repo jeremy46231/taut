@@ -1,14 +1,12 @@
 // Taut Desktop Preferences
-// Reads/writes taut-prefs.json in the Taut config directory.
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { writeFileAtomic } from './atomicWrite.js'
 import { configDir } from './paths.js'
 
 declare const __TAUT_EMBEDDED__: boolean
 
-// Embedded builds default to the bundled copy (served via taut://); standard
-// builds default to jer.app.
 const DEFAULT_APP_URL = __TAUT_EMBEDDED__
   ? 'taut://app/taut.js'
   : 'https://taut.jer.app/taut.js'
@@ -39,9 +37,7 @@ export async function loadPrefs(): Promise<TautPrefs> {
 
 export async function savePrefs(prefs: Partial<TautPrefs>): Promise<void> {
   cached = { ...cached, ...prefs }
-  const dir = path.dirname(getPrefsPath())
-  await fs.mkdir(dir, { recursive: true })
-  await fs.writeFile(getPrefsPath(), JSON.stringify(cached, null, 2), 'utf8')
+  await writeFileAtomic(getPrefsPath(), JSON.stringify(cached, null, 2))
 }
 
 export function getAppUrl(): string {

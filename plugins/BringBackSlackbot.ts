@@ -9,19 +9,14 @@ export default class BringBackSlackbot extends TautPlugin<
   static readonly pluginName = 'Bring Back Slackbot'
   static readonly description =
     'Makes Slackbot custom responses be from Slackbot again'
-  static readonly authors = '<@U06UYA5GMB5>'
+  static readonly authors = ['jeremy'] as const
+  static readonly category = 'messages'
   static readonly defaultConfig = {
     enabled: true,
   }
 
   start(): void {
-    this.api.redux.patchSlice<{ group?: string }>(
-      'experiments',
-      (id, experiment) =>
-        id === 'reskin_custom_responses' && experiment?.group === 'on'
-          ? { ...experiment, group: 'off' }
-          : experiment
-    )
+    this.api.experiments.set('reskin_custom_responses', 'off')
     this.log('Started')
   }
 }

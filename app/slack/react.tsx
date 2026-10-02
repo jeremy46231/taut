@@ -1,12 +1,10 @@
-// Taut React Utilities
-// Provides utilities for finding and patching React components
-
 import { Store } from '../store'
 import {
   findModuleId,
   forEachExport,
   getExport,
   getValueSource,
+  onModuleLoaded,
   waitForExport,
 } from './webpack'
 
@@ -19,8 +17,6 @@ declare global {
     }
   }
 }
-
-// React Detection
 
 function isReact(exp: any): exp is typeof import('react') {
   return (
@@ -42,47 +38,83 @@ function isJsxRuntime(exp: any): boolean {
   )
 }
 
-// Component Finding
-// If using this outside of a plugin, ensure your desired component has loaded first
-
 type filter = (exp: any) => boolean
 
-function componentFilter(name: string, filter?: filter) {
-  const func = (exp: any) => {
-    if (!exp) return false
-    if (filter && !filter(exp)) return false
-
-    if (typeof exp === 'object') {
-      if (exp.$$typeof === Symbol.for('react.memo')) {
-        if (exp.displayName === name) return true
-        if (getComponentName(exp.type) === name) return true
-      }
-      if (exp.$$typeof === Symbol.for('react.forward_ref')) {
-        if (exp.displayName === name) return true
-        if (exp.render?.displayName === name) return true
-        if (exp.render?.name === name) return true
-      }
-    }
-
-    if (typeof exp === 'function') {
-      if (exp.displayName === name) return true
-      if (exp.name === name) return true
-    }
-
-    return false
-  }
-
-  return func
+/** every name a component lookup finds `exp` by */
+function lookupNames(exp: any): unknown[] {
+  if (typeof exp === 'function') return [exp.displayName, exp.name]
+  if (!exp || typeof exp !== 'object') return []
+  if (exp.$$typeof === Symbol.for('react.memo'))
+    return [exp.displayName, getComponentName(exp.type)]
+  if (exp.$$typeof === Symbol.for('react.forward_ref'))
+    return [exp.displayName, exp.render?.displayName, exp.render?.name]
+  return []
 }
 
-// Only used for console warnings if an element doesn't load
+function componentFilter(name: string, filter?: filter) {
+  return (exp: any) =>
+    lookupNames(exp).includes(name) && (!filter || filter(exp))
+}
+
+// names looked up without a filter, each distinct component they find -> its export
+const unfilteredLookups = new Map<string, Map<unknown, unknown>>()
+let scanPending = false
+
+function noteLookupMatch(exp: unknown) {
+  for (const name of lookupNames(exp)) {
+    const found = typeof name === 'string' && unfilteredLookups.get(name)
+    if (!found) continue
+    const layers = unwrapComponentLayers(exp)
+    const component = layers[layers.length - 1]
+    if (found.has(component)) continue
+    found.set(component, exp)
+    if (found.size === 2)
+      console.warn(
+        `[Taut] More than one component is named "${name}", look it up with a filter:`,
+        [...found.values()]
+      )
+  }
+}
+
+/** warns once a second component turns up under `name` */
+function watchForDuplicates(name: string) {
+  if (unfilteredLookups.has(name)) return
+  unfilteredLookups.set(name, new Map())
+  if (scanPending) return
+  scanPending = true
+  // a full scan takes tens of ms, so one idle scan covers each burst of lookups
+  requestIdleCallback(() => {
+    scanPending = false
+    getExport((exp) => {
+      noteLookupMatch(exp)
+      return false
+    }, true)
+  })
+}
+
+onModuleLoaded((exports) => {
+  if (!unfilteredLookups.size) return
+  noteLookupMatch(exports)
+  if (!exports || typeof exports !== 'object') return
+  for (const key in exports) {
+    if (!Object.hasOwn(exports, key)) continue
+    try {
+      noteLookupMatch(exports[key])
+    } catch {}
+  }
+})
+
 const MISSING_MS = 30_000
 
-/** Renders nothing until the component turns up, then renders it from then on */
+/**
+ * renders nothing until the component turns up
+ * if you use this, consider moving it to `api.elements`
+ */
 export function lazyComponent<P extends {}>(
   name: string,
   filter?: filter
 ): React.ComponentType<P> {
+  if (!filter) watchForDuplicates(name)
   const match = componentFilter(name, filter)
   const component = new Store<React.ComponentType<P> | undefined>(undefined)
   let looked = false
@@ -95,7 +127,7 @@ export function lazyComponent<P extends {}>(
       component.set(loaded)
       return
     }
-    void waitForExport<React.ComponentType<P>>(match).then(component.set)
+    waitForExport<React.ComponentType<P>>(match).then(component.set)
     setTimeout(() => {
       if (!component.get()) console.error(`[Taut] "${name}" is unavailable`)
     }, MISSING_MS)
@@ -111,15 +143,16 @@ export function lazyComponent<P extends {}>(
   return LazyComponent
 }
 
-/** Resolves whenever the component turns up, for use outside a render */
+/** resolves whenever the component turns up, for use outside a render */
 export function waitForComponent<P extends {}>(
   name: string,
   filter?: filter
 ): Promise<React.ComponentType<P>> {
+  if (!filter) watchForDuplicates(name)
   return waitForExport<React.ComponentType<P>>(componentFilter(name, filter))
 }
 
-/** Throws if the component's chunk hasn't loaded yet */
+/** throws if the component's chunk hasn't loaded yet */
 export function getComponent<P extends {}>(
   name: string,
   all?: false,
@@ -134,6 +167,7 @@ export function getComponent(name: string, all = false, filter?: filter) {
   const func = componentFilter(name, filter)
 
   if (all) return getExport(func, true)
+  if (!filter) watchForDuplicates(name)
   const result = getExport(func)
   if (!result) throw new Error(`[Taut] Could not find component: ${name}`)
   return result
@@ -141,8 +175,7 @@ export function getComponent(name: string, all = false, filter?: filter) {
 global.waitForComponent = waitForComponent
 global.getComponent = getComponent
 
-// slack never exports plenty of components, and connect keeps no
-// WrappedComponent link back, so note what resolveType sees instead
+// many components aren't exported and connect drops WrappedComponent, so record what resolveType sees
 const renderedComponents = new Map<string, ComponentType>()
 const renderedWaiters = new Map<string, Set<(c: ComponentType) => void>>()
 
@@ -157,15 +190,12 @@ function rememberRendered(type: any) {
   for (const resolve of waiters) resolve(type)
 }
 
-/** Knows only what has been on screen, unlike getComponent which reads exports (avoid if you can) */
+/** only knows what has been on screen, unlike getComponent which reads exports (avoid if you can) */
 export function getRenderedComponent(name: string): ComponentType | undefined {
   return renderedComponents.get(name)
 }
 
-/**
- * Use for components Slack never exports, which only become reachable after
- * something mounts them; resolves immediately if one already has. Avoid if you can
- */
+/** for components Slack never exports, which resolve once something mounts one (avoid if you can) */
 export function waitForRenderedComponent(name: string): Promise<ComponentType> {
   const seen = renderedComponents.get(name)
   if (seen) return Promise.resolve(seen)
@@ -185,8 +215,6 @@ global.getRenderedComponent = getRenderedComponent
 global.waitForRenderedComponent = waitForRenderedComponent
 global.renderedComponents = renderedComponents
 
-// Fiber Utilities
-
 export function getFiberFromNode(node: Element): any | null {
   const key = Object.keys(node).find(
     (k) =>
@@ -196,8 +224,6 @@ export function getFiberFromNode(node: Element): any | null {
   return (node as any)[key]
 }
 global.getFiberFromNode = getFiberFromNode
-
-// Component Patching
 
 export type ComponentType<P = any> = React.ComponentType<P> | string
 
@@ -252,7 +278,7 @@ function unwrapComponentLayers(component: any): any[] {
   return layers
 }
 
-/** Get the source code of a React component, best-effort to get the whole module */
+/** tries for the whole module's source, falls back to the function's own */
 export function getComponentSource(component: ComponentType): string {
   if (typeof component === 'string') {
     throw new Error(`[Taut] "${component}" is a host element, not a component`)
@@ -286,8 +312,7 @@ const componentReplacements = new Map<componentMatcher, componentReplacer>()
 // components seen since the last patch change that match no replacer
 let notPatchedCache = new WeakSet<object>()
 
-// names ever passed to patchComponent, persisted by bootstrap so their
-// wrappers exist before a plugin that patches them has started
+// saved by bootstrap so a name's wrapper exists before the plugin that patches it starts
 export const patchTargets = new Store<ReadonlySet<string>>(new Set())
 
 export function addPatchTargets(names: Iterable<string>): void {
@@ -356,9 +381,6 @@ const notHoisted = new Set([
   'compare',
 ])
 
-/**
- * copy static values from the original component to the replaced component
- */
 function hoistStatics(replaced: any, original: any): void {
   const holds = (value: any) =>
     value && (typeof value === 'function' || typeof value === 'object')
@@ -400,19 +422,13 @@ function applyReplacerWithCache<P = any>(
   return replaced
 }
 
-// Component Wrapping
-// A component that matches a replacer, or whose name has ever been patched,
-// gets one permanent wrapper the first time it reaches createElement/jsx. The
-// wrapper renders whatever the replacers currently compose to, so a patch
-// added or removed later re-renders correctly
+// each matched or ever-patched component gets one permanent wrapper, so later patches rerender in place
 
 type wrappedComponent = {
   Wrapper: React.ComponentType<any>
   composed: Store<ComponentType>
 }
-// original component -> its wrapper
 const wrappedComponents = new Map<object, wrappedComponent>()
-// wrapper -> original component
 const wrapperOriginals = new WeakMap<object, any>()
 // what wrappers render
 const composedComponents = new WeakSet<object>()
@@ -423,7 +439,7 @@ function matchingReplacers(type: ComponentType): componentReplacer[] {
     .map(([, replacer]) => replacer)
 }
 
-/** The original wrapped in every matching replacer, or the original itself */
+/** the original wrapped in every matching replacer, or the original itself */
 function composeComponent(type: ComponentType): ComponentType {
   const original = getOriginalComponentObject(type) as unknown as ComponentType
   const replacers = matchingReplacers(type)
@@ -452,7 +468,7 @@ function wrapComponent(type: object): wrappedComponent {
   return entry
 }
 
-/** Bring every wrapper in line with the current replacers */
+/** brings every wrapper in line with the current replacers */
 function applyPatches() {
   notPatchedCache = new WeakSet<object>()
   for (const [type, { composed }] of wrappedComponents) {
@@ -461,13 +477,9 @@ function applyPatches() {
   }
 }
 
-// Given the type passed to createElement or jsx/jsxs, return the type React
-// should render: the type itself, its wrapper, or the original behind an
-// original-component object
+// returns the type itself, its wrapper, or the component behind an original-component object
 function resolveType(type: any, props: any): any {
-  // __original opts a single render out of patching
-  // the original component object is preferable, because
-  // then multiple patches can be applied to the same component
+  // `__original` opts one render out of patching, but prefer the original component object so patches stack
   const __original = props?.__original
   if (__original) {
     delete props.__original
@@ -521,18 +533,12 @@ function patchComponent<P = object>(
   componentReplacements.set(matcherFunc, replacement)
   if (displayName !== undefined) addPatchTargets([displayName])
   applyPatches()
-  console.log(`[Taut] patchComponent: Patched component`, componentReplacements)
   return () => {
     componentReplacements.delete(matcherFunc)
     applyPatches()
-    console.log(`[Taut] patchComponent: Unpatched component`)
   }
 }
 
-// Runtime Patching
-// Both React module variants are intercepted the same way via forEachExport:
-// find every matching module (existing + future), wrap the render function so
-// all element types pass through resolveType before React sees them
 export const reactPromise: Promise<typeof import('react')> = new Promise(
   (resolve) => {
     forEachExport(isReact, (React) => {
@@ -545,7 +551,7 @@ export const reactPromise: Promise<typeof import('react')> = new Promise(
   }
 )
 
-export const jsxRuntimePromise: Promise<void> = new Promise((resolve) => {
+const jsxRuntimePromise: Promise<void> = new Promise((resolve) => {
   forEachExport(isJsxRuntime, (rt) => {
     const originalJsx = rt.jsx as (type: any, props: any, key: any) => any
     const originalJsxs = rt.jsxs as (type: any, props: any, key: any) => any
@@ -557,7 +563,6 @@ export const jsxRuntimePromise: Promise<void> = new Promise((resolve) => {
   })
 })
 
-// patchComponentPromise: expose patchComponent once both runtimes are patched.
 export const patchComponentPromise = (async () => {
   await reactPromise
   await jsxRuntimePromise

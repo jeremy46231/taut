@@ -1,15 +1,13 @@
-// Randomizes file names before Slack uploads them to prevent metadata leakage
+// Randomizes file names before uploading to prevent metadata leakage
 
 import { TautPlugin } from '$taut'
 
-const CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789'
-const NAME_LENGTH = 7
-
 function randomName(): string {
-  const bytes = new Uint32Array(NAME_LENGTH)
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  const bytes = new Uint32Array(7)
   window.crypto.getRandomValues(bytes)
   let name = ''
-  for (let i = 0; i < NAME_LENGTH; i++) name += CHARS[bytes[i] % CHARS.length]
+  for (const byte of bytes) name += chars[byte % chars.length]
   return name
 }
 
@@ -28,7 +26,8 @@ export default class AnonymizeFileNames extends TautPlugin<
   static readonly pluginName = 'Anonymize Filenames'
   static readonly description =
     'Randomizes file names before uploading to prevent metadata leakage'
-  static readonly authors = '<@U06UYA5GMB5>, <@U080A3QP42C>'
+  static readonly authors = ['jeremy', 'rowan'] as const
+  static readonly category = 'messageBox'
   static readonly defaultConfig = {
     enabled: false,
   }

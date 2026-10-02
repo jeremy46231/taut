@@ -4,7 +4,7 @@
   "compatibility_date": "2026-06-09",
   "main": "src/index.ts",
   "assets": {
-    "directory": "./public",
+    "directory": "../dist/server",
     "binding": "ASSETS"
   },
   "observability": {

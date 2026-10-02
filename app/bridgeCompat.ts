@@ -4,31 +4,14 @@ import type {
   TautBridge,
 } from '../shared/TautBridge'
 
-/**
- * after `normalizeBridge()`, all methods there + boolean for supported features
- */
+/** the same shape for every supported bridge version, with flags for what older loaders lack */
 export type NormalizedBridge = Omit<TautBridge, 'fetch'> & {
   /** bridgeVersion >= 3 */
   readonly supportsUserPlugins: boolean
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>
 }
 
-const V2_BLOB_PREFIX = 'taut:bridge-v2:blob:'
-
-/** These statuses must have a null body or the Response constructor throws */
-const NULL_BODY_STATUS = new Set([101, 204, 205, 304])
-
-/** Decode a base64 string into its raw bytes */
-function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes
-}
-
-/**
- * Electron's contextBridge structure-clones, so response must be rebuilt
- */
+/** Electron's contextBridge structure-clones, so the response must be rebuilt */
 function toResponse(result: Response | SerialResponse): Response {
   if (result instanceof Response) return result
   const status =
@@ -37,25 +20,19 @@ function toResponse(result: Response | SerialResponse): Response {
     result.status <= 599
       ? result.status
       : 200
-  // Prefer the lossless base64 body when the bridge provides it: the UTF-8
-  // `body` string round-trip mangles binary payloads (e.g. images)
-  let body: BodyInit = result?.body ?? ''
-  if (typeof result?.bodyBase64 === 'string') {
-    try {
-      body = base64ToBytes(result.bodyBase64)
-    } catch {
-      // Fall back to the legacy body if a bridge sends malformed base64
+  return new Response(
+    // these statuses must have a null body or the Response constructor throws
+    [101, 204, 205, 304].includes(status) ? null : (result?.body ?? ''),
+    {
+      status,
+      statusText: result?.statusText ?? '',
+      headers: result?.headers ?? {},
     }
-  }
-  return new Response(NULL_BODY_STATUS.has(status) ? null : body, {
-    status,
-    statusText: result?.statusText ?? '',
-    headers: result?.headers ?? {},
-  })
+  )
 }
 
 function localStorageBlobStore(namespace: string): BlobStore {
-  const prefix = `${V2_BLOB_PREFIX}${encodeURIComponent(namespace)}:`
+  const prefix = `taut:bridge-v2:blob:${encodeURIComponent(namespace)}:`
   const storageKey = (key: string) => prefix + encodeURIComponent(key)
 
   return {
@@ -113,7 +90,7 @@ function localStorageBlobStore(namespace: string): BlobStore {
   }
 }
 
-/** Normalize either supported public bridge contract without modifying it. */
+/** for bridge v2 and v3, leaves `raw` unmodified */
 export function normalizeBridge(raw: TautBridge): NormalizedBridge {
   const call =
     <A extends unknown[], R>(fn: (...args: A) => R) =>
@@ -132,6 +109,9 @@ export function normalizeBridge(raw: TautBridge): NormalizedBridge {
     loaderVersion: raw.loaderVersion,
     bridgeVersion: raw.bridgeVersion,
     embedded: raw.embedded,
+    install: raw.install,
+    restartToUpdate: raw.restartToUpdate && call(raw.restartToUpdate),
+    onUpdateReady: raw.onUpdateReady && call(raw.onUpdateReady),
     warnOutdated: call(raw.warnOutdated),
     start: call(raw.start),
     readConfigText: call(raw.readConfigText),
@@ -145,6 +125,7 @@ export function normalizeBridge(raw: TautBridge): NormalizedBridge {
     cookies,
     readSecret: call(raw.readSecret),
     writeSecret: call(raw.writeSecret),
+    deleteSecret: raw.deleteSecret && call(raw.deleteSecret),
     PATHS: raw.PATHS,
   }
 
@@ -186,4 +167,3 @@ export function normalizeBridge(raw: TautBridge): NormalizedBridge {
     blobStore: localStorageBlobStore,
   }
 }
-

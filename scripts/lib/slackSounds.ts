@@ -9,11 +9,10 @@ import type { ReadableStream } from 'node:stream/web'
 import { DESKTOP } from './paths.ts'
 import { versions } from './versions.ts'
 
-// macos resolves a notification's sound by file name from the app bundle's
-// Resources, so the mac build ships the pinned slack version's mp3s there
+// macos finds a notification's sound by file name in the app bundle's Resources, so the mac build ships the pinned Slack's mp3s there
 export const soundsDir = () => path.join(DESKTOP, 'sounds', versions.slack)
 
-/** Pull the pinned Slack's notification mp3s into soundsDir(), downloading once */
+/** pulls the pinned Slack's notification mp3s into soundsDir(), downloading once */
 export async function ensureSlackSounds(): Promise<string> {
   const dir = soundsDir()
   const have = await readdir(dir).catch(() => [] as string[])

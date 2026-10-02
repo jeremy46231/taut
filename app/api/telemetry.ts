@@ -1,5 +1,3 @@
-// Taut Telemetry
-
 import type { BlobStore } from '../../shared/TautBridge'
 import type { NormalizedBridge } from '../bridgeCompat'
 import type { ConfigStore } from '../configStore'
@@ -22,11 +20,10 @@ export class Telemetry {
     this.store = bridge.blobStore('telemetry')
   }
 
-  /** Sends today's ping if due, then keeps checking hourly */
   start(): () => void {
     if (!__TAUT_TELEMETRY__) return () => {}
-    void this.pingIfDue()
-    const timer = setInterval(() => void this.pingIfDue(), CHECK_INTERVAL)
+    this.pingIfDue()
+    const timer = setInterval(() => this.pingIfDue(), CHECK_INTERVAL)
     return () => clearInterval(timer)
   }
 

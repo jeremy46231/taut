@@ -1,34 +1,69 @@
-// Taut Desktop Patch
-// Mutates the cached CJS electron module before Slack's asar loads so every
-// subsequent require('electron') from Slack's code gets our patched versions.
-// Also spoofs the process/app env properties Slack uses to locate its assets.
+// Taut Desktop Patch: gives Slack's require('electron') a patched proxy and spoofs the paths Slack uses to find its assets
 
 import { EventEmitter } from 'node:events'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
-import { app, ipcMain, Menu, shell } from 'electron'
+import { app, ipcMain, Menu, MenuItem, shell } from 'electron'
 import { redirectNativeModules } from './nativeModules.js'
 import { configDir } from './paths.js'
+import { checkForUpdates } from './updates.js'
+
+declare const __TAUT_EMBEDDED__: boolean
 
 const cjsRequire = createRequire(import.meta.url)
 const NodeModule = cjsRequire('module') as any
 const electronCjs = cjsRequire('electron') as Record<string, any>
 
-// intercept Module._load so that any require('electron') from Slack's code returns our Proxy
+// only Slack's require('electron') gets this proxy, Taut's own dependencies get the real module
 const overrides: Record<string, any> = {}
 const electronProxy = new Proxy(electronCjs, {
   get(target, prop: string) {
     return prop in overrides ? overrides[prop] : target[prop]
   },
 })
-const origModuleLoad = NodeModule._load
-NodeModule._load = function (request: string, ...args: any[]) {
-  if (request === 'electron') return electronProxy
-  return origModuleLoad.call(this, request, ...args)
+
+// Slack's app.asar paths, set before Slack loads
+let slackAsars: string[] = []
+function isSlackModule(parent: { filename?: unknown } | undefined) {
+  const file = parent?.filename
+  if (typeof file !== 'string') return false
+  return slackAsars.some((asar) => {
+    const rel = path.relative(asar, file)
+    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel)
+  })
 }
 
-// disable the auto updater
+// Slack reads MDM prefs through cf-prefs, forced AutoUpdate off drops its update menu items and polling
+let cfPrefsShim: object | null = null
+function shimCfPrefs(real: Record<string, any>) {
+  const forcedPrefs: Record<string, unknown> = { AutoUpdate: false }
+  const forced = (key: string) => Object.hasOwn(forcedPrefs, key)
+  cfPrefsShim ??= new Proxy(real, {
+    get(target, prop) {
+      if (prop === 'isPreferenceForced') {
+        return (key: string) => forced(key) || target.isPreferenceForced(key)
+      }
+      if (prop === 'getPreferenceValue') {
+        return (key: string) =>
+          forced(key) ? forcedPrefs[key] : target.getPreferenceValue(key)
+      }
+      return target[prop as string]
+    },
+  })
+  return cfPrefsShim
+}
+
+const origModuleLoad = NodeModule._load
+NodeModule._load = function (request: string, parent: any, ...args: any[]) {
+  if (request === 'electron' && isSlackModule(parent)) return electronProxy
+  const loaded = origModuleLoad.call(this, request, parent, ...args)
+  if (request === 'cf-prefs' && process.platform === 'darwin') {
+    return shimCfPrefs(loaded)
+  }
+  return loaded
+}
+
 class NoopAutoUpdater extends EventEmitter {
   setFeedURL() {}
   getFeedURL() {
@@ -43,7 +78,6 @@ class NoopAutoUpdater extends EventEmitter {
   }
 }
 overrides.autoUpdater = new NoopAutoUpdater()
-// disable the crash reporter
 overrides.crashReporter = {
   start() {},
   getLastCrashReport: () => null,
@@ -55,15 +89,25 @@ overrides.crashReporter = {
   getParameters: () => ({}),
 }
 
-// Taut menu
-
 let openOptionsWindowFn: (() => void) | null = null
 
 export function setOpenOptionsWindow(fn: () => void) {
   openOptionsWindowFn = fn
 }
 
+// embedded builds carry their own copy and don't get updates
+const updateItems: Electron.MenuItemConstructorOptions[] = __TAUT_EMBEDDED__
+  ? []
+  : [
+      {
+        id: 'taut-check-for-updates',
+        label: 'Check for Updates…',
+        click: () => checkForUpdates(),
+      },
+    ]
+
 const tautMenuTemplate: Electron.MenuItemConstructorOptions = {
+  id: 'taut',
   label: 'Taut',
   submenu: [
     {
@@ -71,9 +115,10 @@ const tautMenuTemplate: Electron.MenuItemConstructorOptions = {
       click: () => shell.openExternal('https://github.com/jeremy46231/taut'),
     },
     {
-      label: 'Change App Source...',
+      label: 'Change App Source…',
       click: () => openOptionsWindowFn?.(),
     },
+    ...updateItems,
     { type: 'separator' },
     { role: 'toggleDevTools', accelerator: 'CmdOrCtrl+Alt+I' },
     { role: 'reload' },
@@ -83,21 +128,47 @@ const tautMenuTemplate: Electron.MenuItemConstructorOptions = {
   ],
 }
 
-function injectTautMenu(
-  items: (Electron.MenuItem | Electron.MenuItemConstructorOptions)[]
-) {
-  const out = [...items]
-  const helpIdx = out.findIndex((i) => (i as Electron.MenuItem).role === 'help')
-  helpIdx !== -1
-    ? out.splice(helpIdx, 0, tautMenuTemplate)
-    : out.push(tautMenuTemplate)
-  return out
+function tautMenuIndex(menu: Electron.Menu) {
+  const { items } = menu
+  if (items.some((i) => i.id === 'taut')) return -1
+  const helpIdx = items.findIndex((i) => i.role === 'help')
+  return helpIdx === -1 ? items.length : helpIdx
 }
 
-// BrowserWindow proxy
+// forcing AutoUpdate off removes Slack's item after About in the mac app menu, so ours replaces it
+function addAppMenuUpdateItems(menu: Electron.Menu) {
+  const submenu = menu.items.find((i) => i.id === 'menucategory-slack')?.submenu
+  if (!submenu || submenu.items.some((i) => i.id === 'taut-check-for-updates'))
+    return
+  const about = submenu.items.findIndex((i) => i.id === 'menuitem-about-slack')
+  for (const [i, item] of updateItems.entries()) {
+    submenu.insert(about + 1 + i, new MenuItem(item))
+  }
+}
+
+function withTautMenu(menu: Electron.Menu) {
+  addAppMenuUpdateItems(menu)
+  const idx = tautMenuIndex(menu)
+  if (idx === -1) return menu
+  const { items } = menu
+  return Menu.buildFromTemplate([
+    ...items.slice(0, idx),
+    tautMenuTemplate,
+    ...items.slice(idx),
+  ])
+}
+
+// only Slack's app menu has `menucategory-*` top-level items
+const isSlackAppMenu = (menu: Electron.Menu) =>
+  menu.items.some((i) => i.id?.startsWith('menucategory-'))
 
 export function applyPatches(slackAsarPath: string, tautPreloadPath: string) {
   const slackResourcesPath = path.dirname(slackAsarPath)
+  // module filenames are realpaths
+  slackAsars = [path.resolve(slackAsarPath)]
+  try {
+    slackAsars.push(realpathSync(slackAsarPath))
+  } catch {}
   redirectNativeModules(slackResourcesPath)
 
   let originalPreloadContents: string | null = null
@@ -127,21 +198,25 @@ export function applyPatches(slackAsarPath: string, tautPreloadPath: string) {
     },
   })
 
-  // Menu: inject Taut submenu
   const origSetAppMenu = electronCjs.Menu.setApplicationMenu.bind(
     electronCjs.Menu
   )
-  electronCjs.Menu.setApplicationMenu = (menu: Electron.Menu | null) => {
-    if (!menu) return origSetAppMenu(menu)
-    return origSetAppMenu(Menu.buildFromTemplate(injectTautMenu(menu.items)))
-  }
+  electronCjs.Menu.setApplicationMenu = (menu: Electron.Menu | null) =>
+    origSetAppMenu(menu && withTautMenu(menu))
   const origSetMenu = OrigBrowserWindow.prototype.setMenu
   OrigBrowserWindow.prototype.setMenu = function (menu: Electron.Menu | null) {
-    if (!menu) return origSetMenu.call(this, menu)
-    return origSetMenu.call(
-      this,
-      Menu.buildFromTemplate(injectTautMenu(menu.items))
-    )
+    return origSetMenu.call(this, menu && withTautMenu(menu))
+  }
+  // the Windows title bar menu button pops up Slack's reused app menu object instead of the window menu
+  const origPopup = electronCjs.Menu.prototype.popup
+  electronCjs.Menu.prototype.popup = function (
+    this: Electron.Menu,
+    ...args: Parameters<Electron.Menu['popup']>
+  ) {
+    if (isSlackAppMenu(this)) addAppMenuUpdateItems(this)
+    const idx = isSlackAppMenu(this) ? tautMenuIndex(this) : -1
+    if (idx !== -1) this.insert(idx, new MenuItem(tautMenuTemplate))
+    return origPopup.apply(this, args)
   }
 
   const pendingUrls: string[] = []
@@ -179,13 +254,13 @@ export function applyPatches(slackAsarPath: string, tautPreloadPath: string) {
     console.log(`[Taut] open-url fired: ${url}`)
     if (event?.preventDefault) event.preventDefault()
     if (replaying) return
-    // Once Slack has registered its own handler, stop capturing
+    // stop capturing once Slack registers its own handler
     if (app.listeners('open-url').some((l) => l !== captureListener)) return
     pendingUrls.push(url)
   }
   origOn('open-url', captureListener)
 
-  // Environment: make Slack think it's running from its own bundle
+  // make Slack think it's running from its own bundle
   Object.defineProperty(process, 'resourcesPath', {
     configurable: true,
     value: slackResourcesPath,

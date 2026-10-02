@@ -1,5 +1,4 @@
-// Adds a "Switch account" submenu to the profile menu (above "Sign out") for
-// jumping between saved same-workspace accounts without re-logging in
+// Switch between saved accounts from the profile menu
 
 import {
   type ComponentType,
@@ -15,9 +14,6 @@ type AccountRowProps = {
   onRemove: (userId: string) => void
 }
 
-const SIGN_OUT_KEYS = ['sign-out', 'signout-submenu']
-const SWITCHER_KEY = 'taut-account-switcher'
-
 function orgKey(account: StoredAccount): string {
   const enterpriseId = account.team?.enterprise_id
   return typeof enterpriseId === 'string' ? enterpriseId : account.teamId
@@ -30,10 +26,11 @@ export default class AccountSwitcher extends TautPlugin<
   static readonly pluginName = 'Account Switcher'
   static readonly description =
     'Switch between saved accounts from the profile menu'
+  static readonly category = 'app'
   static readonly defaultConfig = {
     enabled: true,
   }
-  static readonly authors = '<@U06UYA5GMB5>'
+  static readonly authors = ['jeremy'] as const
 
   private accountsStore = new this.api.Store<StoredAccount[]>([])
   private currentUserId: string | null = null
@@ -57,9 +54,11 @@ export default class AccountSwitcher extends TautPlugin<
           const template = props.template
           if (Array.isArray(template)) {
             const idx = template.findIndex(
-              (it) => it && SIGN_OUT_KEYS.includes(it.key)
+              (it) => it && ['sign-out', 'signout-submenu'].includes(it.key)
             )
-            const already = template.some((it) => it && it.key === SWITCHER_KEY)
+            const already = template.some(
+              (it) => it && it.key === 'taut-account-switcher'
+            )
             if (idx !== -1 && !already) {
               const next = [
                 ...template.slice(0, idx),
@@ -73,14 +72,13 @@ export default class AccountSwitcher extends TautPlugin<
         }
     )
 
-    void this.captureAndRefresh()
+    this.captureAndRefresh()
 
     this.log('Started')
   }
 
   private async captureAndRefresh() {
-    // The active team/token isn't always populated the moment we start, so
-    // retry the capture a few times before giving up.
+    // the active team and token aren't always set yet when the plugin starts
     for (let attempt = 0; attempt < 10; attempt++) {
       if (this.api.signal.aborted) return
       try {
@@ -112,11 +110,10 @@ export default class AccountSwitcher extends TautPlugin<
   private async refresh() {
     try {
       const all = await this.api.accounts.list()
-      // Profiles come from the current workspace's store, so scope to it
+      // profiles come from the current workspace's store
       const scoped = this.currentOrgKey
         ? all.filter((a) => orgKey(a) === this.currentOrgKey)
         : all
-      // Most-recently-saved first, with the current account pinned to the top
       const sorted = scoped.sort((a, b) => {
         if (a.userId === this.currentUserId) return -1
         if (b.userId === this.currentUserId) return 1
@@ -301,7 +298,7 @@ export default class AccountSwitcher extends TautPlugin<
     })
 
     return {
-      key: SWITCHER_KEY,
+      key: 'taut-account-switcher',
       label: 'Switch account',
       type: 'submenu',
       template,

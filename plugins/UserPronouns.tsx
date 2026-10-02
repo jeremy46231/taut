@@ -1,4 +1,4 @@
-// Shows each person's pronouns after the timestamp on their messages
+// Shows people's pronouns next to the timestamp on their messages
 
 import { TautPlugin } from '$taut'
 
@@ -18,9 +18,9 @@ type ThreadHeaderProps = {
   omitLinebreak?: boolean
 }
 
-const USER_ID_RE = /^[UW][A-Z0-9]+$/
 const MAX_LENGTH = 40
 
+const USER_ID_RE = /^[UW][A-Z0-9]+$/
 const isPerson = (
   msg: Message | undefined
 ): msg is Message & { user: string } =>
@@ -48,7 +48,8 @@ export default class UserPronouns extends TautPlugin<typeof UserPronouns> {
   static readonly pluginName = 'User Pronouns'
   static readonly description =
     "Shows people's pronouns next to the timestamp on their messages"
-  static readonly authors = '<@U06UYA5GMB5>'
+  static readonly authors = ['jeremy'] as const
+  static readonly category = 'messages'
   static readonly defaultConfig = {
     enabled: true,
   }

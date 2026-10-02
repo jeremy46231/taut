@@ -12,11 +12,9 @@ declare const __TAUT_EMBEDDED__: boolean
 declare const __TAUT_APP_JS__: string
 
 const OFFICIAL_URL = 'https://taut.jer.app/taut.js'
-const EMBEDDED_SENTINEL = '<embedded>'
-const DEFAULT_URL = __TAUT_EMBEDDED__ ? EMBEDDED_SENTINEL : OFFICIAL_URL
+const DEFAULT_URL = __TAUT_EMBEDDED__ ? '<embedded>' : OFFICIAL_URL
 const OPTIONS_URL = 'https://taut.jer.app/options'
 
-// Expose tautPrefs on the real window
 unsafeWindow.tautPrefs = {
   getUrl: () => Promise.resolve(GM_getValue('tautUrl', DEFAULT_URL)),
   setUrl: (url) => {
@@ -41,7 +39,7 @@ if (location.href.startsWith(OPTIONS_URL)) {
   document.close()
   ;(async () => {
     const tautUrl = GM_getValue('tautUrl', DEFAULT_URL)
-    const useEmbedded = __TAUT_EMBEDDED__ && tautUrl === EMBEDDED_SENTINEL
+    const useEmbedded = __TAUT_EMBEDDED__ && tautUrl === '<embedded>'
 
     let html: string
     try {
@@ -54,7 +52,6 @@ if (location.href.startsWith(OPTIONS_URL)) {
     const doc = new DOMParser().parseFromString(html, 'text/html')
     doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.remove()
 
-    // Collect and remove all script elements
     const scripts = Array.from(doc.querySelectorAll('script')).map((s) => ({
       src: (s as HTMLScriptElement).src,
       textContent: s.textContent,
@@ -64,13 +61,12 @@ if (location.href.startsWith(OPTIONS_URL)) {
       s.remove()
     })
 
-    // Inject taut.js, then Slack's scripts
     const tautScript = doc.createElement('script')
     tautScript.id = 'taut-app'
     if (useEmbedded) {
       tautScript.textContent = __TAUT_APP_JS__
     } else {
-      const resolvedUrl = tautUrl === EMBEDDED_SENTINEL ? OFFICIAL_URL : tautUrl
+      const resolvedUrl = tautUrl === '<embedded>' ? OFFICIAL_URL : tautUrl
       const scriptError = (url: string) =>
         `alert('[Taut] Failed to load a script.\\n\\nURL: ' + ${JSON.stringify(url)} + '\\n\\n${url.includes('://localhost') ? 'Make sure your server is running.' : 'Ask in #taut for help.'}')`
       tautScript.src = resolvedUrl
@@ -86,7 +82,6 @@ if (location.href.startsWith(OPTIONS_URL)) {
       doc.head.appendChild(s)
     }
 
-    // Reconstruct the document
     document.open()
     document.write(`<!DOCTYPE html>${doc.documentElement.outerHTML}`)
     document.close()

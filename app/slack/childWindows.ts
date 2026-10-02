@@ -1,6 +1,4 @@
-// Taut Child Window Utilities
-
-import { patchExportFunction } from './webpack'
+import { byName, patchFunctionExport } from './webpack'
 
 const documents = new Set<Document>()
 
@@ -14,13 +12,12 @@ function prune() {
   }
 }
 
-/** Live child window documents, closed ones dropped */
 export function childWindowDocuments(): Document[] {
   prune()
   return [...documents]
 }
 
-/** Run a callback for every child window document, present and future */
+/** runs for every child window document, present and future */
 export function onChildWindow(listener: ChildWindowListener): () => void {
   listeners.add(listener)
   for (const doc of childWindowDocuments()) {
@@ -44,10 +41,9 @@ function register(doc: Document) {
   }
 }
 
-// Slack's own stylesheet copy, run once per child window after its doctype is
-// settled and before React renders into it
-patchExportFunction(
-  'copyDocumentStylesheets',
+// Slack runs this once per child window, after its doctype settles and before React renders into it
+patchFunctionExport(
+  byName('copyDocumentStylesheets'),
   (original) =>
     async function copyDocumentStylesheets(source: Document, target: Document) {
       const result = await original(source, target)

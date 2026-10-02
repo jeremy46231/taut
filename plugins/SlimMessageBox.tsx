@@ -5,34 +5,24 @@ import { TautPlugin } from '$taut'
 type TextyButtonsProps = Record<string, unknown>
 type PrefPayload = { pref?: string; value?: unknown }
 type PrefsBoot = { prefsData?: Record<string, unknown> }
-type InputContainerProps = { dontShowBroadcastControls?: boolean }
 
 const SCOPE = '.p-message_input__input_container_unstyled'
 
-/** slack's account-wide pref for the formatting bar */
-const PREFS = 'userPrefs'
+/** slack's account-wide pref for the formatting bar, in `state.userPrefs` */
 const FORMATTING_PREF = 'msg_input_sticky_composer'
-const FORMATTING_KEY = 'showFormatting'
-const SLACK_KEY = 'slackShowFormatting'
 
-// store a copy sync to prevent unstyled flashes
-const MIRROR_KEY = 'taut_slim_message_box_formatting'
+// a sync copy so boot doesn't flash the wrong state
 const readMirror = (): boolean | undefined => {
-  const raw = localStorage.getItem(MIRROR_KEY)
+  const raw = localStorage.getItem('taut_slim_message_box_formatting')
   return raw === null ? undefined : raw === 'true'
 }
 const writeMirror = (value: boolean) =>
-  localStorage.setItem(MIRROR_KEY, String(value))
+  localStorage.setItem('taut_slim_message_box_formatting', String(value))
 
 /** the message claims this much, and the buttons sit beside it only if they fit */
 const MIN_EDITOR_WIDTH = 450
 
-/**
- * a container query cannot ask what the buttons measure, so estimate: slack's
- * row is ~340px, less what you turned off. Only decides when one line starts, so
- * being wrong costs message width rather than breaking the layout
- */
-const CONTAINER = 'taut-composer'
+/** an estimate since a container query can't measure the buttons, a wrong one only costs message width */
 const SLACK_BUTTON_ROW = 340
 const BUTTON_WIDTH = 32
 const oneLineWidth = (hidden: number) =>
@@ -51,8 +41,10 @@ const BUTTON_PROPS: Record<string, string[]> = {
 // attachments get slack's stacked layout back, since they need the full width
 const ONE_LINE = `${SCOPE}:not(:has(.c-wysiwyg_container__attachments, .p-message_input__attachments, .c-pending_files, .c-message__editor__composer_attachments))`
 
-const layoutCss = (hiddenButtons: number) => `
-  ${SCOPE} { container: ${CONTAINER} / inline-size; }
+const BROADCAST = '.p-threads_footer__input_container__broadcast_controls'
+
+const layoutCss = (hiddenButtons: number, broadcastCheckbox: boolean) => `
+  ${SCOPE} { container: taut-composer / inline-size; }
 
   ${ONE_LINE} .c-basic_container__body {
     display: flex !important;
@@ -61,8 +53,7 @@ const layoutCss = (hiddenButtons: number) => `
     align-items: flex-end !important;
     column-gap: 6px;
   }
-  /* everything slack stacks above the editor (alerts, the formatting bar) keeps a
-     full-width row, in the order its grid-template-areas gives them */
+  /* whatever slack stacks above the editor (alerts, the formatting bar) keeps a full-width row, in its grid-template-areas order */
   ${ONE_LINE} .c-basic_container__body > * { order: 0; flex: 1 0 100%; }
   ${ONE_LINE} .c-basic_container__body > :empty { display: none; }
   ${ONE_LINE} .c-wysiwyg_container__formatting { order: 1; }
@@ -77,8 +68,7 @@ const layoutCss = (hiddenButtons: number) => `
     order: 5;
     flex: 1 0 100%;
   }
-  /* whole and last, so attach, buttons and send wrap as a unit with send in the
-     corner. Its own line below the query, where the contained row measures ~0 */
+  /* last and whole so attach, buttons and send wrap together, full width below the query since the contained row measures ~0 there */
   ${ONE_LINE} .c-wysiwyg_container__footer {
     display: flex !important;
     order: 6;
@@ -91,23 +81,24 @@ const layoutCss = (hiddenButtons: number) => `
     flex: 0 0 auto !important;
   }
 
-  @container ${CONTAINER} (min-width: ${oneLineWidth(hiddenButtons)}) {
+  @container taut-composer (min-width: ${oneLineWidth(hiddenButtons)}) {
     ${ONE_LINE} .c-wysiwyg_container__footer { flex: 1 1 auto !important; }
-    /* with no floor to wrap against the toolbar always fits beside the message,
-       so the checkbox stays under it. Capping it instead strands send on a row */
-    ${ONE_LINE}:has(.p-threads_footer__input_container__broadcast_controls)
-      .c-texty_input_unstyled__container {
-      min-width: 0 !important;
+    ${
+      broadcastCheckbox
+        ? `
+          /* no min-width so the toolbar always fits beside the message and the checkbox stays below, a cap strands send on its own row */
+          ${ONE_LINE}:has(${BROADCAST}) .c-texty_input_unstyled__container {
+            min-width: 0 !important;
+          }
+          /* slack leaves this no bottom padding, having always had the buttons below it */
+          ${ONE_LINE} ${BROADCAST} {
+            order: 7;
+            padding-bottom: 8px;
+          }
+        `
+        : ''
     }
-    /* slack leaves this no bottom padding, having always had the buttons below it */
-    ${ONE_LINE} .p-threads_footer__input_container__broadcast_controls {
-      order: 7;
-      padding-bottom: 8px;
-    }
-    /* slack sizes this row from the OUTSIDE (container-type: inline-size), so
-       beside the message it comes out 0 wide and the buttons spill over send.
-       Dropping the box also reads as nothing to do to the overflow menu's test,
-       which starts at an offsetWidth && */
+    /* slack's row is container-type: inline-size so it comes out 0 wide beside the message, and with no box the overflow menu's offsetWidth test sees nothing to do */
     ${ONE_LINE} .c-wysiwyg_container__toolbar_buttons {
       flex: 0 1 auto !important;
       min-width: 0 !important;
@@ -116,19 +107,12 @@ const layoutCss = (hiddenButtons: number) => `
   }
 `
 
-const COMPACT_CSS = `
-  ${SCOPE} .c-wysiwyg_container__footer_divider { display: none !important; }
-`
-
-const NO_BROADCAST_CSS = `
-  .p-threads_footer__input_container { min-height: 0; }
-`
-
 export default class SlimMessageBox extends TautPlugin<typeof SlimMessageBox> {
   static readonly id = 'SlimMessageBox'
   static readonly pluginName = 'Slim Message Box'
   static readonly description = 'Simplifies and cleans up the message box'
-  static readonly authors = '<@U06UYA5GMB5>, <@U080A3QP42C>'
+  static readonly authors = ['jeremy', 'rowan'] as const
+  static readonly category = 'messageBox'
   static readonly defaultConfig = {
     enabled: false,
     oneLineLayout: true,
@@ -142,12 +126,14 @@ export default class SlimMessageBox extends TautPlugin<typeof SlimMessageBox> {
   }
 
   /** what the formatting bar was set to before we swapped ours in */
-  private slackFormatting: boolean | undefined
+  private slackFormatting = this.api.storage.store<boolean | null>(
+    'slackShowFormatting',
+    null
+  )
+  private savedFormatting = this.api.storage.store('showFormatting', false)
   private formatting: boolean | undefined
   /** whether the dispatch in flight is ours, echoing a value we only read */
   private echoing = false
-  /** the read of that value, which anything learning it has to wait behind */
-  private recorded: Promise<void> | undefined
 
   start(): void {
     // only an explicit false hides one, so a config missing a key keeps its button
@@ -160,10 +146,11 @@ export default class SlimMessageBox extends TautPlugin<typeof SlimMessageBox> {
       )
     )
 
-    this.api.setStyle(COMPACT_CSS)
+    this.api.setStyle(`
+      ${SCOPE} .c-wysiwyg_container__footer_divider { display: none !important; }
+    `)
 
-    // slack ships minButtonsForOverflow: 5 against a group of 2, so the menu it
-    // has for narrow composers never opens and the buttons just overlap instead
+    // slack ships minButtonsForOverflow: 5 against a group of 2, so its menu for narrow composers never opens
     this.api.patchComponent<TextyButtonsProps>(
       'TextyButtons',
       (Original) => (props) => (
@@ -171,46 +158,67 @@ export default class SlimMessageBox extends TautPlugin<typeof SlimMessageBox> {
       )
     )
 
-    if (this.config.showBroadcastCheckbox === false) {
-      this.api.patchComponent<InputContainerProps>(
-        'InputContainer',
-        (Original) => (props) => (
-          <Original {...props} dontShowBroadcastControls />
-        )
-      )
-      this.api.setStyle(NO_BROADCAST_CSS)
+    const broadcastCheckbox = this.config.showBroadcastCheckbox
+    if (!broadcastCheckbox) {
+      // we need slack to still render the checkbox, since its props are the only way to reach the value
+      this.api.setStyle(`
+        .p-threads_footer__input_container { min-height: 0; }
+        ${BROADCAST} { display: none !important; }
+      `)
+      this.api.composer.addButton({
+        id: 'taut-broadcast',
+        placement: 'native',
+        kinds: ['thread'],
+        render: ({ channelId, broadcast }) => {
+          const name = this.api.redux.useReduxState(
+            (state) => state?.channels?.[channelId]?.name as string | undefined
+          )
+          if (!broadcast) return null
+          const [also, dont] =
+            broadcast.channelType === 'im'
+              ? ['Also send as direct message', "Don't send as direct message"]
+              : broadcast.channelType === 'mpim'
+                ? ['Also send to the group', "Don't send to the group"]
+                : [
+                    `Also send to ${name ? `#${name}` : 'channel'}`,
+                    `Don't send to ${name ? `#${name}` : 'channel'}`,
+                  ]
+          return {
+            icon: broadcast.active ? 'megaphone-filled' : 'megaphone',
+            label: also,
+            tooltip: broadcast.active ? dont : also,
+            pressed: broadcast.active,
+            onClick: () => broadcast.set(!broadcast.active),
+          }
+        },
+      })
     }
 
-    if (this.config.oneLineLayout !== false)
-      this.api.setStyle(layoutCss(hidden.length))
+    if (this.config.oneLineLayout)
+      this.api.setStyle(layoutCss(hidden.length, broadcastCheckbox))
 
-    void this.separateFormattingBar()
+    this.separateFormattingBar()
 
     this.log('Started')
   }
 
   async stop(): Promise<void> {
-    localStorage.removeItem(MIRROR_KEY)
-    if (this.slackFormatting === undefined) return
-    // still hits the patched thunks
-    await this.apply(this.slackFormatting)
-    await this.api.storage.delete(SLACK_KEY)
+    localStorage.removeItem('taut_slim_message_box_formatting')
+    const slack = this.slackFormatting.get()
+    if (slack === null) return
+    // the thunk patches are still in place here
+    await this.apply(slack)
+    await this.api.storage.delete('slackShowFormatting')
   }
 
   private async separateFormattingBar() {
     const redux = this.api.redux
     const pref = (): boolean | undefined =>
-      redux.getStore()?.getState()?.[PREFS]?.[FORMATTING_PREF]
+      redux.getStore()?.getState()?.userPrefs?.[FORMATTING_PREF]
     const settle = async (value: boolean | undefined) => {
       if (value !== undefined && value !== !!pref()) await this.apply(value)
     }
 
-    const truth = this.api.storage.get(FORMATTING_KEY, false)
-    this.recorded = this.api.storage
-      .get<boolean | null>(SLACK_KEY, null)
-      .then((stored) => {
-        if (stored !== null) this.slackFormatting = stored
-      })
     this.formatting = readMirror()
 
     redux.patchThunk(
@@ -226,7 +234,9 @@ export default class SlimMessageBox extends TautPlugin<typeof SlimMessageBox> {
         if (payload?.pref === FORMATTING_PREF && !this.echoing) {
           this.formatting = !!payload.value
           writeMirror(this.formatting)
-          void this.api.storage.set(FORMATTING_KEY, this.formatting)
+          this.savedFormatting
+            .set(this.formatting)
+            .catch((err) => this.log('Could not save', err))
         }
         return original(payload)
       }
@@ -236,7 +246,7 @@ export default class SlimMessageBox extends TautPlugin<typeof SlimMessageBox> {
       (original) => (payload: PrefsBoot) => {
         const prefs = payload?.prefsData
         if (!prefs || !(FORMATTING_PREF in prefs)) return original(payload)
-        void this.recordSlackFormatting(!!prefs[FORMATTING_PREF])
+        this.recordSlackFormatting(!!prefs[FORMATTING_PREF])
         return original({
           ...payload,
           prefsData: { ...prefs, [FORMATTING_PREF]: this.formatting ?? false },
@@ -244,12 +254,13 @@ export default class SlimMessageBox extends TautPlugin<typeof SlimMessageBox> {
       }
     )
 
-    void this.recordSlackFormatting(pref())
+    this.recordSlackFormatting(pref())
     await settle(this.formatting)
 
-    this.formatting = await truth
+    await this.savedFormatting.ready
+    this.formatting = this.savedFormatting.get()
     writeMirror(this.formatting)
-    await this.recorded
+    await this.slackFormatting.ready
     if (this.api.signal.aborted) return
     await settle(this.formatting)
   }
@@ -263,14 +274,17 @@ export default class SlimMessageBox extends TautPlugin<typeof SlimMessageBox> {
     }
   }
 
-  /** the account's own value, kept from whichever run first saw it */
+  /** the account's own value, from whichever run first saw it */
   private async recordSlackFormatting(value: boolean | undefined) {
-    // undefined !== false
+    // unknown isn't false
     if (value === undefined) return
-    await this.recorded
-    if (this.slackFormatting !== undefined) return
-    this.slackFormatting = value
-    await this.api.storage.set(SLACK_KEY, value)
+    await this.slackFormatting.ready
+    if (this.slackFormatting.get() !== null) return
+    try {
+      await this.slackFormatting.update((saved) => saved ?? value)
+    } catch (err) {
+      this.log('Could not save', err)
+    }
   }
 
   private showFormatting(value: boolean) {

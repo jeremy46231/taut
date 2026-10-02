@@ -12,10 +12,8 @@ export type SerialFetchResponse = {
   status: number
   statusText: string
   headers: Record<string, string>
-  /** Body decoded as UTF-8 text. Lossy for binary payloads. */
-  body: string
-  /** Body as base64-encoded raw bytes (lossless). */
-  bodyBase64: string
+  /** arrives in the page as a Uint8Array */
+  body: Uint8Array<ArrayBuffer>
 }
 
 export type DesktopRpc = {
@@ -26,6 +24,7 @@ export type DesktopRpc = {
   writeUserCss: (text: string) => Promise<boolean>
   readSecret: (key: string) => Promise<string | null>
   writeSecret: (key: string, value: string) => Promise<boolean>
+  deleteSecret: (key: string) => Promise<boolean>
   listUserPlugins: () => Promise<string[]>
   readUserPlugin: (id: string) => Promise<string | null>
   writeUserPlugin: (id: string, code: string) => Promise<boolean>

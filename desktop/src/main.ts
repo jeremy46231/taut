@@ -1,5 +1,4 @@
 // Taut Desktop Main Process
-// Orchestrates startup: loads prefs, patches electron, sets up session/bridge, loads Slack
 
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -18,6 +17,7 @@ import {
   REACT_DEVELOPER_TOOLS,
 } from 'electron-devtools-installer'
 import { installAppImageDesktopEntry } from './appImage.js'
+import { startAutoUpdate } from './autoUpdate.js'
 import { setupBridge } from './bridge.js'
 import { applyPatches, setOpenOptionsWindow } from './patch.js'
 import { configDir } from './paths.js'
@@ -34,10 +34,9 @@ import {
   downloadSlack,
   downloadSlackNatives,
   downloadSlackWithWindow,
+  pruneSlackCache,
 } from './slackDownload.js'
 import { findInstalledSlackAsar } from './slackFinder.js'
-
-const cjsRequire = createRequire(import.meta.url)
 
 declare const __TAUT_EMBEDDED__: boolean
 declare const __TAUT_APP_ID__: string
@@ -46,7 +45,7 @@ declare const __TAUT_MAC_SIGNING__: string
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// Save real resourcesPath before patch.ts spoofs it
+// captured before patch.ts spoofs it
 const realResourcesPath = process.resourcesPath
 
 // don't touch global stuff like slack://, .desktop, etc
@@ -63,6 +62,8 @@ if (__TAUT_EMBEDDED__) {
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
+        // V8 keeps compiled bytecode for taut:// scripts across launches
+        codeCache: true,
       },
     },
   ])
@@ -72,7 +73,14 @@ function resolveSlackAsar(): string | undefined {
   const override = process.env.TAUT_SLACK_ASAR
   if (override) return override
   const cached = cachedSlackAsar()
-  if (cached) return cached
+  if (cached) {
+    // the previous version's Slack, after an update
+    app
+      .whenReady()
+      .then(() => pruneSlackCache())
+      .catch((err) => console.warn('[Taut] Slack cache cleanup failed:', err))
+    return cached
+  }
   const installed = findInstalledSlackAsar()
   if (installed) {
     app
@@ -90,7 +98,6 @@ const slackAsarPath = resolveSlackAsar()
 if (slackAsarPath) {
   startSlack(slackAsarPath)
 } else {
-  // first launch, can't find slack
   app.whenReady().then(async () => {
     await downloadSlackWithWindow()
     // slack has to run before the app is ready
@@ -125,7 +132,7 @@ function startSlack(slackAsarPath: string) {
 
   if (!temporary) {
     // the desktop entry has to exist before xdg is asked to route slack:// to it
-    void installAppImageDesktopEntry().then(() => {
+    installAppImageDesktopEntry().then(() => {
       const ok = app.setAsDefaultProtocolClient('slack')
       console.log(
         ok
@@ -183,12 +190,13 @@ function startSlack(slackAsarPath: string) {
     resetStaleMacPermissions()
     requestNotificationPermission()
     setupSession(realResourcesPath)
+    startAutoUpdate()
 
     if (process.env.TAUT_REACT_DEVTOOLS !== '1') return
 
     try {
       await installExtension(REACT_DEVELOPER_TOOLS)
-      // Workaround for https://github.com/electron/electron/issues/41613
+      // workaround for https://github.com/electron/electron/issues/41613
       const extensions = (
         session.defaultSession as any
       ).extensions.getAllExtensions() as any[]
@@ -215,11 +223,9 @@ function startSlack(slackAsarPath: string) {
     {
       getAppUrl,
       setAppUrl: (url: string) => savePrefs({ appUrl: url }),
-      openOptionsWindow,
     }
   )
 
-  // Handle slack:// URLs passed as CLI args
   const slackArgUrl = process.argv.find((a) => a.startsWith('slack://'))
   if (slackArgUrl) {
     app.whenReady().then(() => {
@@ -243,10 +249,9 @@ function startSlack(slackAsarPath: string) {
     console.log('[Taut] All windows closed')
   })
 
-  // Load Slack
   console.log(`[Taut] Loading Slack from ${slackAsarPath}`)
   try {
-    cjsRequire(slackAsarPath)
+    createRequire(import.meta.url)(slackAsarPath)
   } catch (err) {
     console.error('[Taut] Failed to load Slack:', err)
     app.whenReady().then(() => {

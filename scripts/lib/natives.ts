@@ -6,15 +6,18 @@ export interface SlackNativeModule {
   version: string
   file: string
   slackPackage?: string
+  /** the version of `slackPackage` this pin was checked against, when slack ships a fork */
+  slackVersion?: string
 }
 
 export const SLACK_NATIVE_MODULES: SlackNativeModule[] = [
   {
-    // slack's fork (2.2.x) only adds ignoreAllEvents, that's fine
+    // slack's fork only adds ignoreAllEvents, that's fine
     package: 'native-keymap',
     version: '3.3.9',
     file: 'keymapping.node',
     slackPackage: '@tinyspeck/native-keymap',
+    slackVersion: '2.2.3',
   },
   {
     package: 'file-handler-info',

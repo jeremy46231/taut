@@ -2,9 +2,6 @@
 // Sets up window.TautBridge in main world using postMessage relay to content script
 
 ;(() => {
-  const CONFIG_KEY = 'taut-config'
-  const CSS_KEY = 'taut-user-css'
-
   let msgId = 0
 
   /**
@@ -52,8 +49,9 @@
     }
     if (msg.name !== 'storage.changed') return
     const { key, newValue } = msg.payload
-    if (key === CONFIG_KEY) for (const cb of configTextCallbacks) cb(newValue)
-    if (key === CSS_KEY) for (const cb of userCssCallbacks) cb(newValue)
+    if (key === 'taut-config')
+      for (const cb of configTextCallbacks) cb(newValue)
+    if (key === 'taut-user-css') for (const cb of userCssCallbacks) cb(newValue)
   })
 
   /** @satisfies {import('../../shared/TautBridge').TautBridge} */
@@ -77,6 +75,7 @@
     readSecret: (key) => call('readSecret', [key]).catch(() => null),
     writeSecret: (key, value) =>
       call('writeSecret', [key, value]).catch(() => false),
+    deleteSecret: (key) => call('deleteSecret', [key]).catch(() => false),
 
     userPlugins: {
       list: () => call('listUserPlugins', []).catch(() => []),
@@ -152,18 +151,21 @@
       }
       return call('fetch', [url, serialInit]).then(
         (r) =>
-          new Response(r.body, {
-            status: r.status,
-            statusText: r.statusText,
-            headers: r.headers,
-          })
+          // these statuses need a null body or the constructor throws
+          new Response(
+            [101, 204, 205, 304].includes(r.status) ? null : r.body,
+            {
+              status: r.status,
+              statusText: r.statusText,
+              headers: r.headers,
+            }
+          )
       )
     },
 
     warnOutdated() {
-      // TODO: improve this
       alert(
-        '[Taut] Your Taut extension is outdated and may not work correctly.\n\nPlease update the Taut extension to continue using it.'
+        '[Taut] This Taut extension is too old for the current Taut, so Slack will load without it.\n\nUpdate it: https://taut.jer.app'
       )
     },
   }

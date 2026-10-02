@@ -1,4 +1,4 @@
-// Minimal reactive store for state read inside a React render
+// minimal reactive store for state read inside a React render
 
 export class Store<T> {
   private value: T
@@ -29,7 +29,7 @@ export class Store<T> {
     return () => this.target.removeEventListener('change', onChange)
   }
 
-  /** Reactively read the current value inside a component */
+  /** a hook, rerenders the component when the value changes */
   use = (): T => {
     return React.useSyncExternalStore(this.subscribe, this.get)
   }

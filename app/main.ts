@@ -1,8 +1,8 @@
-// Taut App Entrypoint
-// Checks loader preconditions then bootstraps
+// Taut App Entrypoint: checks loader preconditions, then bootstraps
 
 import { bootstrap } from './bootstrap'
 import { normalizeBridge } from './bridgeCompat'
+import { slackLoadedFirst } from './slack/webpack'
 
 export const MIN_BRIDGE_VERSION = 2
 
@@ -43,7 +43,7 @@ function main() {
   }
 
   // Precondition 3: Slack webpack must not have loaded yet (loader injected us too late)
-  if (global.webpackChunkwebapp) {
+  if (slackLoadedFirst) {
     alert(
       '[Taut] Failed to initialize: Slack loaded before Taut. Slack will load normally.'
     )

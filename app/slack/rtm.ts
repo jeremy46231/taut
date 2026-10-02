@@ -1,13 +1,18 @@
-// Taut RTM Utilities
-// Observes Slack's websocket events where they enter the client
-
 import { patchThunk } from './redux'
 import { patchModuleExports } from './webpack'
 
 export type RtmEvent = {
   type?: string
   subtype?: string
-  [key: string]: any
+  channel?: string
+  user?: string
+  ts?: string
+  event_ts?: string
+  bot_id?: string
+  app_id?: string
+  message?: RtmEvent
+  edited?: { user?: string; ts?: string }
+  [key: string]: unknown
 }
 
 export type RtmListener = (event: RtmEvent) => void

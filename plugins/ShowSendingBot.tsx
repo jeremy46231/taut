@@ -1,6 +1,7 @@
 // Shows the bot used to send a user message
 
 import {
+  opt,
   type SlackActivityItem,
   type SlackBot,
   type SlackMessage,
@@ -16,7 +17,6 @@ type ActivityAvatarProps = {
 }
 
 const SERVICE_RE = /\/services\/(B[A-Z0-9]+)/
-const MCP_FOOTER_RE = /^\*Sent using\*\s+<@([UW][A-Z0-9]+)>$/
 
 /** whether an avatar is the one a surface draws for a message's sender */
 const drawsSender = (className = '') =>
@@ -41,6 +41,7 @@ type ContextBlock = {
   elements?: { type?: string; text?: unknown }[]
 }
 
+const MCP_FOOTER_RE = /^\*Sent using\*\s+<@([UW][A-Z0-9]+)>$/
 /** the bot from an MCP message's footer */
 const mcpFooterMember = (msg?: SlackMessage): string | undefined => {
   const blocks = msg?.blocks as ContextBlock[] | undefined
@@ -51,7 +52,6 @@ const mcpFooterMember = (msg?: SlackMessage): string | undefined => {
   return MCP_FOOTER_RE.exec(String(element.text ?? '').trim())?.[1]
 }
 
-/** Remove the footer from MCP messages */
 const withoutMcpFooter = (msg: SlackMessage): SlackMessage => {
   const next: SlackMessage = {
     ...msg,
@@ -66,10 +66,15 @@ export default class ShowSendingBot extends TautPlugin<typeof ShowSendingBot> {
   static readonly id = 'ShowSendingBot'
   static readonly pluginName = 'Show Sending Bot'
   static readonly description = 'Shows the bot used to send a user message'
-  static readonly authors = '<@U06UYA5GMB5>'
+  static readonly authors = ['jeremy'] as const
+  static readonly category = 'messages'
   static readonly defaultConfig = {
     enabled: true,
-    hideMcpFooter: true,
+    hideMcpFooter: opt(
+      true,
+      'Hide the "Sent using" footer on messages sent through an MCP app',
+      { label: 'Hide MCP footer' }
+    ),
   }
 
   /** the app that posted a message, keyed "channel:ts"; null once we know of none */
@@ -146,7 +151,7 @@ export default class ShowSendingBot extends TautPlugin<typeof ShowSendingBot> {
     if (key) this.pendingApps.add(key)
     if (this.appTimer || this.api.signal.aborted) return
     // batch a bunch of new messages in one call
-    this.appTimer = setTimeout(() => void this.lookUpApps(), 50)
+    this.appTimer = setTimeout(() => this.lookUpApps(), 50)
   }
 
   private takeApps(): Map<string, string[]> {

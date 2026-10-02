@@ -1,4 +1,4 @@
-// Adds a chip to each reaction bar that copies the people who reacted
+// Copy the list of people who reacted to a message
 
 import { type MenuTemplateItem, opt, TautPlugin } from '$taut'
 
@@ -7,26 +7,34 @@ type ReactionBarProps = { reactions?: SlackReaction[] }
 
 // stable identity, so context consumers don't rerender
 const NO_REACTIONS: SlackReaction[] = []
-type Format = 'mentions' | 'names'
-const SEPARATORS: Record<string, string> = {
-  space: ' ',
-  newline: '\n',
-  comma: ', ',
-}
 
 export default class CopyReacted extends TautPlugin<typeof CopyReacted> {
   static readonly id = 'CopyReacted'
   static readonly pluginName = 'Copy Reacted'
   static readonly description =
     'Copy the list of people who reacted to a message'
-  static readonly authors = '<@U06UYA5GMB5>, <@U080A3QP42C>'
+  static readonly authors = ['jeremy', 'rowan'] as const
+  static readonly category = 'messages'
   static readonly defaultConfig = {
     enabled: false,
-    format: opt(
-      'mentions' as Format,
-      '"mentions" for <@U123>, or "names" for display names'
+    format: opt.select(
+      [
+        { value: 'mentions', label: 'Mentions (<@U123>)' },
+        { value: 'names', label: 'Display names' },
+        { value: 'handles', label: 'Handles (@username)' },
+      ],
+      'mentions',
+      'How each person is written'
     ),
-    separator: opt('space', '"space", "newline", or "comma"'),
+    separator: opt.select(
+      [
+        { value: 'space', label: 'Spaces' },
+        { value: 'newline', label: 'New lines' },
+        { value: 'comma', label: 'Commas' },
+      ],
+      'space',
+      'What goes between people'
+    ),
   }
 
   private readonly ReactionsContext =
@@ -42,19 +50,29 @@ export default class CopyReacted extends TautPlugin<typeof CopyReacted> {
     )
   }
 
+  private async reactorHandle(userId: string): Promise<string> {
+    const member = await this.api.members.getMember(userId)
+    return `@${member?.name || userId}`
+  }
+
   private async copyReactors(userIds: string[]): Promise<void> {
     const reactors = [...new Set(userIds)]
     if (!reactors.length) return
-    const separator = SEPARATORS[String(this.config.separator)] ?? ' '
+    const separator = { space: ' ', newline: '\n', comma: ', ' }[
+      this.config.separator
+    ]
+    const { format } = this.config
     const lines =
-      this.config.format === 'names'
+      format === 'names'
         ? await Promise.all(reactors.map((id) => this.reactorName(id)))
-        : reactors.map((id) => `<@${id}>`)
+        : format === 'handles'
+          ? await Promise.all(reactors.map((id) => this.reactorHandle(id)))
+          : reactors.map((id) => `<@${id}>`)
     try {
       await navigator.clipboard.writeText(lines.join(separator))
     } catch (err) {
       this.log('could not copy reactors', err)
-      void this.api.modal.alert({
+      this.api.modal.alert({
         title: 'Could not copy',
         body: 'Slack denied access to the clipboard.',
       })
@@ -73,7 +91,7 @@ export default class CopyReacted extends TautPlugin<typeof CopyReacted> {
       {
         key: 'taut-copy-reacted__everyone',
         label: `Everyone (${everyone.length})`,
-        click: () => void this.copyReactors(everyone),
+        click: () => this.copyReactors(everyone),
       },
     ]
     if (reactions.length > 1) {
@@ -86,7 +104,7 @@ export default class CopyReacted extends TautPlugin<typeof CopyReacted> {
               text={`:${reaction.name}: (${reaction.users?.length ?? 0})`}
             />
           ),
-          click: () => void this.copyReactors(reaction.users ?? []),
+          click: () => this.copyReactors(reaction.users ?? []),
         })
       }
     }

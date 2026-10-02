@@ -1,7 +1,6 @@
-// Adds a little cat that chases your cursor around the screen
-// Based on oneko.js by @adryd325 (https://github.com/adryd325/oneko.js)
+// A cute cat that chases your cursor around the screen, based on oneko.js
 
-import { type PluginConfig, type TautAPI, TautPlugin } from '$taut'
+import { opt, type PluginConfig, type TautAPI, TautPlugin } from '$taut'
 
 const NEKO_FILE =
   'https://raw.githubusercontent.com/adryd325/oneko.js/46b0684f29694eaf3252835003f4d9d0258556e5/oneko.gif'
@@ -89,18 +88,20 @@ export default class Oneko extends TautPlugin<typeof Oneko> {
   static readonly pluginName = 'Oneko'
   static readonly description =
     'A cute cat that chases your cursor around the screen, based on <https://github.com/adryd325/oneko.js|oneko.js>'
-  static readonly authors =
-    '<https://github.com/adryd325|@adryd325>, <@U06UYA5GMB5>'
+  static readonly authors = ['adryd', 'jeremy'] as const
+  static readonly category = 'fun'
   static readonly defaultConfig = {
     enabled: false,
-    speed: 10,
+    speed: opt.number(10, 'How far the cat runs each step, in pixels', {
+      min: 1,
+      max: 100,
+    }),
   }
 
   nekoEl: HTMLDivElement | null = null
   animationFrameId: number | null = null
   lastFrameTimestamp: number | null = null
 
-  // State
   nekoPosX = 32
   nekoPosY = 32
   mousePosX = 0
@@ -110,7 +111,6 @@ export default class Oneko extends TautPlugin<typeof Oneko> {
   idleAnimation: string | null = null
   idleAnimationFrame = 0
 
-  // Event handlers bound to instance
   boundHandleMouseMove: (event: MouseEvent) => void
   boundHandleBeforeUnload: () => void
   boundOnAnimationFrame: (timestamp: number) => void
@@ -128,27 +128,22 @@ export default class Oneko extends TautPlugin<typeof Oneko> {
     this.loadState()
     this.attachListeners()
 
-    // Start loop
     this.animationFrameId = window.requestAnimationFrame(
       this.boundOnAnimationFrame
     )
   }
 
   stop(): void {
-    // Cancel loop
     if (this.animationFrameId !== null) {
       window.cancelAnimationFrame(this.animationFrameId)
       this.animationFrameId = null
     }
 
-    // Save state one last time before destroying
     this.saveState()
 
-    // Remove listeners
     document.removeEventListener('mousemove', this.boundHandleMouseMove)
     window.removeEventListener('beforeunload', this.boundHandleBeforeUnload)
 
-    // Remove Element
     if (this.nekoEl) {
       this.nekoEl.remove()
       this.nekoEl = null
@@ -239,7 +234,7 @@ export default class Oneko extends TautPlugin<typeof Oneko> {
 
     if (timestamp - this.lastFrameTimestamp > 100) {
       if (timestamp - this.lastFrameTimestamp > 500) {
-        // If more than 0.5 seconds have passed, reset to avoid large jumps
+        // skip missed frames after a long gap instead of catching up in a burst
         this.lastFrameTimestamp = timestamp
       } else {
         this.lastFrameTimestamp += 100
@@ -269,7 +264,7 @@ export default class Oneko extends TautPlugin<typeof Oneko> {
   idle(): void {
     this.idleTime += 1
 
-    // every ~ 20 seconds
+    // about every 20 seconds on average
     if (
       this.idleTime > 10 &&
       Math.floor(Math.random() * 200) === 0 &&

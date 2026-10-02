@@ -1,38 +1,38 @@
 // Optimizations that make Slack faster and smoother
 
-import { TautPlugin } from '$taut'
+import { opt, TautPlugin } from '$taut'
 
 const QUIET_MS = 150
-
-const RESIZING = 'taut-resizing'
-const LEFT_BASIS = '--taut-top-nav-left-basis'
-const LEFT_CONTAINER = '.p-ia4_top_nav__left_container'
-
-// the left container's basis is linear in the window width, so two samples of
-// what slack's js picked lets us recreate it with css while pausing the js
-const TOP_NAV_CSS = `
-  .${RESIZING} ${LEFT_CONTAINER} {
-    flex-basis: var(${LEFT_BASIS}) !important;
-  }
-`
 
 export default class FasterSlack extends TautPlugin<typeof FasterSlack> {
   static readonly id = 'FasterSlack'
   static readonly pluginName = 'Faster Slack'
   static readonly description =
     'Optimizations that make Slack faster and smoother'
-  static readonly authors = '<@U06UYA5GMB5>'
+  static readonly authors = ['jeremy'] as const
+  static readonly category = 'app'
   static readonly defaultConfig = {
     enabled: true,
-    optimizeResize: true,
+    optimizeResize: opt(
+      true,
+      "Pause Slack's layout work while the window is being resized"
+    ),
   }
 
   /** [window width, the basis slack settled on], most recent last */
   private samples: [number, number][] = []
 
   start() {
-    if (this.config.optimizeResize !== false) {
-      this.api.setStyle(TOP_NAV_CSS, 'top-nav')
+    if (this.config.optimizeResize) {
+      // slack's js sets the left basis linearly in window width, so css extrapolates it from two samples while paused
+      this.api.setStyle(
+        `
+          .taut-resizing .p-ia4_top_nav__left_container {
+            flex-basis: var(--taut-top-nav-left-basis) !important;
+          }
+        `,
+        'top-nav'
+      )
       this.sampleLeftBasis()
       this.api.deferResizeWork({
         quietMs: QUIET_MS,
@@ -43,24 +43,27 @@ export default class FasterSlack extends TautPlugin<typeof FasterSlack> {
   }
 
   stop() {
-    document.documentElement.classList.remove(RESIZING)
-    document.documentElement.style.removeProperty(LEFT_BASIS)
+    document.documentElement.classList.remove('taut-resizing')
+    document.documentElement.style.removeProperty('--taut-top-nav-left-basis')
     this.log('Stopped')
   }
 
   private onHoldChange(holding: boolean) {
     const { classList, style } = document.documentElement
     if (holding) {
-      if (style.getPropertyValue(LEFT_BASIS)) classList.add(RESIZING)
+      if (style.getPropertyValue('--taut-top-nav-left-basis'))
+        classList.add('taut-resizing')
       return
     }
-    classList.remove(RESIZING)
+    classList.remove('taut-resizing')
     // slack writes its own basis as it re-renders, so read it after that
     requestAnimationFrame(() => this.sampleLeftBasis())
   }
 
   private sampleLeftBasis() {
-    const container = document.querySelector<HTMLElement>(LEFT_CONTAINER)
+    const container = document.querySelector<HTMLElement>(
+      '.p-ia4_top_nav__left_container'
+    )
     const basis = Number.parseFloat(container?.style.flexBasis ?? '')
     const width = window.innerWidth
     if (!Number.isFinite(basis) || !width) return
@@ -77,6 +80,9 @@ export default class FasterSlack extends TautPlugin<typeof FasterSlack> {
       if (!(slope > 0)) return
       value = `calc(${last[1]}px + ${slope} * (100vw - ${last[0]}px))`
     }
-    document.documentElement.style.setProperty(LEFT_BASIS, value)
+    document.documentElement.style.setProperty(
+      '--taut-top-nav-left-basis',
+      value
+    )
   }
 }

@@ -6,7 +6,8 @@ export default class BrowserPopouts extends TautPlugin<typeof BrowserPopouts> {
   static readonly id = 'BrowserPopouts'
   static readonly pluginName = 'Browser Pop-outs'
   static readonly description = "Enables Slack's pop-out windows in the browser"
-  static readonly authors = '<@U06UYA5GMB5>'
+  static readonly authors = ['jeremy'] as const
+  static readonly category = 'app'
   static readonly defaultConfig = {
     enabled: true,
   }

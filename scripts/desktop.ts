@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Launches the desktop app in an isolated instance. Run with --help.
+// Launches the desktop app in an isolated instance, run with --help
 
 import { launchInstance, realConfigDir, URL_SPECS } from './lib/instance.ts'
 
@@ -67,6 +67,6 @@ console.log(`[desktop] devtools http://127.0.0.1:${taut.cdpPort}/json/list`)
 console.log(`[desktop] main process inspector on ${taut.inspectPort}`)
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => void taut.stop())
+  process.on(signal, () => taut.stop())
 }
 process.exit(await taut.exited)

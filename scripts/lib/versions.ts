@@ -23,3 +23,13 @@ export const versions = {
     .version as string,
   userscript: json(path.join(USERSCRIPT, 'version.json')).version as string,
 }
+
+const recommendedIn = (dir: string) =>
+  json(path.join(dir, 'recommended.json')).recommendedVersion as string
+
+export const recommended = {
+  desktop: recommendedIn(DESKTOP),
+  chromeExtension: recommendedIn(path.join(EXTENSION, 'chrome')),
+  firefoxExtension: recommendedIn(path.join(EXTENSION, 'firefox')),
+  userscript: recommendedIn(USERSCRIPT),
+}

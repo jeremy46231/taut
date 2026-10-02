@@ -1,5 +1,3 @@
-// Persistent cache with per-item TTL and fetch deduplication for plugin use
-
 import type { BlobStore } from '../../shared/TautBridge'
 
 type CacheEntry<T> = { value: T; ts: number }
@@ -7,9 +5,7 @@ export type CacheOptions = { ttl?: number; maxSize?: number }
 
 const WRITE_DELAY = 2000
 
-/**
- * Persistent TTL cache with fetch-dedup
- */
+/** persistent cache, `ttl` is in ms and concurrent `fetch`es of one key share a call */
 export class Cache<T> {
   private storageKey: string
   private ttl?: number

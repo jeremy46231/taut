@@ -1,8 +1,10 @@
-// Taut Redux Utilities
-// Access to Slack's react-redux store, plus read-time state patching
-
 import { getFiberFromNode, reactPromise } from './react'
-import { patchExportFunction, patchModuleExports } from './webpack'
+import {
+  byMeta,
+  byName,
+  patchFunctionExport,
+  patchModuleExports,
+} from './webpack'
 
 export type SlackStore = {
   getState(): any
@@ -12,10 +14,8 @@ export type SlackStore = {
 
 export type StatePatch = (state: any) => any
 const statePatches = new Set<StatePatch>()
-// Bumped on register/unregister to invalidate each store's getState memo
 let statePatchVersion = 0
 
-// Wrap a store's getState so reads flow through statePatches
 function wrapGetState(store: SlackStore): void {
   if ((store.getState as any).__tautWrapped) return
   const realGetState = store.getState.bind(store)
@@ -28,11 +28,8 @@ function wrapGetState(store: SlackStore): void {
     if (raw === cachedRaw && cachedVersion === statePatchVersion)
       return cachedOut
     let out = raw
-    for (const patch of statePatches) {
-      try {
-        out = patch(out)
-      } catch {}
-    }
+    for (const patch of statePatches)
+      out = guarded(patch, out, () => patch(out))
     cachedRaw = raw
     cachedVersion = statePatchVersion
     cachedOut = out
@@ -43,14 +40,25 @@ function wrapGetState(store: SlackStore): void {
   store.getState = wrapped
 }
 
-// Hook redux's createStore to wrap the getState of every store it creates
-patchExportFunction('createStore', (originalCreateStore) => (...args) => {
-  const store = originalCreateStore(...args)
-  try {
-    wrapGetState(store)
-  } catch {}
-  return store
+// Slack makes several stores and the rendered one is only known once its <Provider> mounts
+const lookingForStore = new Set<() => void>()
+let resolveStore: (store: SlackStore) => void
+const storePromise = new Promise<SlackStore>((resolve) => {
+  resolveStore = resolve
 })
+
+patchFunctionExport(
+  byName('createStore'),
+  (originalCreateStore) =>
+    (...args) => {
+      const store = originalCreateStore(...args)
+      try {
+        wrapGetState(store)
+        if (!cachedStore) lookingForStore.add(store.subscribe(getReduxStore))
+      } catch {}
+      return store
+    }
+)
 
 let cachedStore: SlackStore | null = null
 
@@ -68,10 +76,58 @@ export function getReduxStore(): SlackStore | null {
       typeof store.subscribe === 'function'
     ) {
       cachedStore = store
+      resolveStore(store)
+      for (const unsubscribe of lookingForStore) unsubscribe()
+      lookingForStore.clear()
       return store
     }
   }
   return null
+}
+
+/** Slack's react-redux store, once it exists */
+export function waitForStore(): Promise<SlackStore> {
+  return Promise.resolve(getReduxStore() ?? storePromise)
+}
+
+/** `store.subscribe` starting once the store exists, returns a disposer */
+export function subscribeStore(listener: () => void): () => void {
+  let unsubscribe: (() => void) | undefined
+  let disposed = false
+  waitForStore().then((store) => {
+    if (!disposed) unsubscribe = store.subscribe(listener)
+  })
+  return () => {
+    disposed = true
+    unsubscribe?.()
+  }
+}
+
+/** the first non-undefined `read()`, checked now and after every dispatch, rejects if `signal` aborts */
+export function waitForState<T>(
+  read: () => T | undefined,
+  signal?: AbortSignal
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      if (signal?.aborted) return done(() => reject(signal.reason))
+      let value: T | undefined
+      try {
+        value = read()
+      } catch (err) {
+        return done(() => reject(err))
+      }
+      if (value !== undefined) done(() => resolve(value))
+    }
+    const done = (settle: () => void) => {
+      unsubscribe()
+      signal?.removeEventListener('abort', check)
+      settle()
+    }
+    const unsubscribe = subscribeStore(check)
+    signal?.addEventListener('abort', check)
+    check()
+  })
 }
 
 /** Slack's state as it is stored, with Taut's read-time transforms left off */
@@ -86,11 +142,11 @@ const patchListeners = new Set<() => void>()
 
 const subscribePatches = (notify: () => void) => {
   patchListeners.add(notify)
-  return () => void patchListeners.delete(notify)
+  return () => patchListeners.delete(notify)
 }
 export const getPatchVersion = () => statePatchVersion
 
-/** Invalidate patched reads and nudge connected views to re-read */
+/** invalidates patched reads and nudges connected views to re-read */
 export function refreshState(): void {
   statePatchVersion++
   try {
@@ -103,9 +159,10 @@ export function refreshState(): void {
   }
 }
 
-/** Register a read-time state transform */
+/** registers a read-time state transform */
 export function patchState(patch: StatePatch): () => void {
   statePatches.add(patch)
+  failed.delete(patch)
   refreshState()
   return () => {
     statePatches.delete(patch)
@@ -122,6 +179,26 @@ type Memo = {
   cache: Map<string, { input: any; output: any }>
   added: Set<string>
   version: number
+}
+
+// a patch that throws has its whole registration (patchState or patchSlice call) switched off
+const failed = new WeakSet<object>()
+let running: object | undefined
+function guarded<R>(owner: object, fallback: R, run: () => R): R {
+  if (failed.has(owner)) return fallback
+  const outer = running
+  running = owner
+  try {
+    return run()
+  } catch (error) {
+    failed.add(owner)
+    console.error('[Taut] A redux patch threw and was switched off', error)
+    // drop what it already produced
+    queueMicrotask(refreshState)
+    return fallback
+  } finally {
+    running = outer
+  }
 }
 
 const memos = new WeakMap<MapEntry<any>, Memo>()
@@ -141,18 +218,13 @@ export function mapEntries<T = any>(
   addedKeys?: () => Iterable<string>
 ): object {
   const memo = memoFor(mapEntry)
-  // A refresh (version bump) means the closure's inputs may have changed, so
-  // memoized results and the added-key set are dropped and recomputed.
+  // `mapEntry` is often a fresh closure per read, so a failure switches off the registration behind it
+  const owner = running ?? mapEntry
+  // a refresh may mean the closure's inputs changed, so the memo and added keys start over
   const sync = () => {
     if (memo.version === statePatchVersion) return
     memo.cache = new Map()
-    if (addedKeys) {
-      try {
-        memo.added = new Set(addedKeys())
-      } catch {
-        memo.added = new Set()
-      }
-    }
+    memo.added = new Set(addedKeys ? guarded(owner, [], addedKeys) : [])
     memo.version = statePatchVersion
   }
   const run = (key: PropertyKey, value: any): any => {
@@ -160,7 +232,7 @@ export function mapEntries<T = any>(
     sync()
     const hit = memo.cache.get(key)
     if (hit && hit.input === value) return hit.output
-    const output = mapEntry(key, value as T | undefined)
+    const output = guarded(owner, value, () => mapEntry(key, value))
     memo.cache.set(key, { input: value, output })
     return output
   }
@@ -221,16 +293,105 @@ export function mapEntries<T = any>(
   })
 }
 
+export type SliceOptions = {
+  /** keys the slice doesn't have that read through `mapEntry` anyway */
+  addedKeys?: () => Iterable<string>
+}
+
+type SlicePatch = {
+  mapEntry: MapEntry<any>
+  addedKeys?: () => Iterable<string>
+}
+/** a slice read through every patch on it */
+type SliceView = {
+  mapEntry: MapEntry<any>
+  addedKeys?: () => Iterable<string>
+  raw?: object
+  version: number
+  proxy?: object
+}
+type SliceLayer = {
+  patches: SlicePatch[]
+  // recomposed whenever `patches` changes, which also starts fresh memos
+  all: SliceView
+}
+const sliceLayers = new Map<string, SliceLayer>()
+let unpatchSlices: (() => void) | undefined
+
+function composeView(patches: SlicePatch[]): SliceView {
+  return {
+    mapEntry: (key, entry) => {
+      let out = entry
+      for (const patch of patches)
+        out = guarded(patch, out, () => patch.mapEntry(key, out))
+      return out
+    },
+    addedKeys: patches.some((patch) => patch.addedKeys)
+      ? () =>
+          patches.flatMap((patch) =>
+            patch.addedKeys ? [...guarded(patch, [], patch.addedKeys)] : []
+          )
+      : undefined,
+    version: -1,
+  }
+}
+
+// one proxy per slice until the slice or version changes, or whole-slice selectors rerun every action
+function readView(view: SliceView, slice: object): object {
+  if (!view.proxy || view.raw !== slice || view.version !== statePatchVersion) {
+    view.raw = slice
+    view.version = statePatchVersion
+    view.proxy = mapEntries(slice, view.mapEntry, view.addedKeys)
+  }
+  return view.proxy
+}
+
+function patchSlices(state: any): any {
+  let out = state
+  for (const [sliceName, layer] of sliceLayers) {
+    const slice = state?.[sliceName]
+    if (!slice || typeof slice !== 'object') continue
+    if (out === state) out = { ...state }
+    out[sliceName] = readView(layer.all, slice)
+  }
+  return out
+}
+
+/** read `sliceName`'s entries through `mapEntry(key, entry)`, the third argument is `addedKeys` or options */
 export function patchSlice<T = any>(
   sliceName: string,
   mapEntry: MapEntry<T>,
-  addedKeys?: () => Iterable<string>
+  options?: SliceOptions | SliceOptions['addedKeys']
 ): () => void {
-  return patchState((state) => {
-    const slice = state?.[sliceName]
-    if (!slice || typeof slice !== 'object') return state
-    return { ...state, [sliceName]: mapEntries(slice, mapEntry, addedKeys) }
-  })
+  const addedKeys = typeof options === 'function' ? options : options?.addedKeys
+  const patch: SlicePatch = { mapEntry, addedKeys }
+  let layer = sliceLayers.get(sliceName)
+  if (!layer) {
+    layer = { patches: [], all: composeView([]) }
+    sliceLayers.set(sliceName, layer)
+  }
+  layer.patches.push(patch)
+  layer.all = composeView(layer.patches)
+  if (unpatchSlices) refreshState()
+  else unpatchSlices = patchState(patchSlices)
+
+  let disposed = false
+  return () => {
+    if (disposed) return
+    disposed = true
+    const current = sliceLayers.get(sliceName)
+    if (!current) return
+    current.patches = current.patches.filter((other) => other !== patch)
+    if (current.patches.length) current.all = composeView(current.patches)
+    else sliceLayers.delete(sliceName)
+    if (sliceLayers.size || !unpatchSlices) {
+      refreshState()
+      return
+    }
+    const unpatch = unpatchSlices
+    unpatchSlices = undefined
+    unpatch()
+  }
 }
 
 type ThunkWrap = {
@@ -265,7 +426,6 @@ const wrapCreator = (original: ThunkCreator): ThunkCreator =>
 function registerCreator(creator: ThunkCreator): void {
   // the defining module assigns `meta` on the statement after createThunk
   queueMicrotask(() => {
-    // now that statement has run, the meta should be there
     const name = (creator as any).meta?.name
     if (typeof name !== 'string') return
     thunkCreators.set(name, creator)
@@ -286,7 +446,7 @@ const readExport = (exports: any, key: string): any => {
 const isThunkKinds = (value: any): boolean =>
   value?.Thunk === 'Thunk' && value?.Fetcher === 'Fetcher'
 
-// Every thunk and fetcher in the app uses createThunk
+// every thunk and fetcher in the app uses createThunk
 patchModuleExports((exports) => {
   if (!exports || typeof exports !== 'object') return
   const keys = Object.keys(exports)
@@ -300,8 +460,8 @@ patchModuleExports((exports) => {
   const createThunk = exports[key] as (...args: any[]) => ThunkCreator
   const descriptors = Object.getOwnPropertyDescriptors(exports)
   descriptors[key] = {
-    value: (...args: any[]) => {
-      const creator = wrapCreator(createThunk(...args))
+    value: (description: unknown, callback: unknown, ...rest: unknown[]) => {
+      const creator = wrapCreator(createThunk(description, callback, ...rest))
       registerCreator(creator)
       return creator
     },
@@ -341,13 +501,13 @@ export async function dispatchThunk<T = any>(
   return store.dispatch(creator(...args))
 }
 
-/** Observe or alter a Slack redux thunk */
+/** `match` is a thunk name or a test on its creator, returns a disposer */
 export function patchThunk(
   match: string | ThunkWrap['match'],
   wrap: ThunkWrap['wrap']
 ): () => void {
   const matcher: ThunkWrap['match'] =
-    typeof match === 'string' ? (v) => v?.meta?.name === match : match
+    typeof match === 'string' ? byMeta(match) : match
   const entry: ThunkWrap = { match: matcher, wrap }
   thunkWraps.add(entry)
   return () => {
@@ -355,10 +515,10 @@ export function patchThunk(
   }
 }
 
-/** Reactively select from the store inside a React render */
 export const reduxPromise = (async () => {
   const React = await reactPromise
 
+  /** reactively select from the store inside a React render */
   function useReduxState<T>(selector: (state: any) => T): T | undefined {
     const store = getReduxStore()
     const selectorRef = React.useRef(selector)
@@ -374,15 +534,16 @@ export const reduxPromise = (async () => {
     return React.useSyncExternalStore(subscribe, getSnapshot)
   }
 
-  // Slack's connect memoizes off the raw state, so it never re-runs for a
-  // read-time patch. A component reading patched state needs this to re-render.
+  // Slack's connect memoizes off the raw state, so a component reading patched state needs this to rerender
   function usePatchVersion(): number {
     return React.useSyncExternalStore(subscribePatches, getPatchVersion)
   }
 
   return {
     getStore: getReduxStore,
+    waitForStore,
     getRawState,
+    waitForState,
     useReduxState,
     usePatchVersion,
     patchState,

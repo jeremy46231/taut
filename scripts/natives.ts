@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-// Builds the arm64 linux replacements for Slack's native modules
-// Run on arm64 linux with a C++ toolchain, python3, libx11-dev, libxkbfile-dev
+// Builds the arm64 linux replacements for Slack's native modules, run on arm64 linux with a C++ toolchain, python3, libx11-dev and libxkbfile-dev
 
 import { execFileSync } from 'node:child_process'
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
