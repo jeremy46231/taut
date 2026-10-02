@@ -3,6 +3,9 @@
   "name": "taut-server",
   "compatibility_date": "2026-06-09",
   "main": "src/index.ts",
+  // only served on taut.jer.app, and workers.dev makes wrangler read an account setting the CI token can't
+  "workers_dev": false,
+  "preview_urls": false,
   "assets": {
     "directory": "../dist/server",
     "binding": "ASSETS"

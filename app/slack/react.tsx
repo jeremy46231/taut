@@ -539,12 +539,23 @@ function patchComponent<P = object>(
   }
 }
 
+const renderWrappers = new WeakSet<object>()
+/** `render` resolving its type first, or `render` itself if it already does (a second resolve would drop `__original`) */
+function resolvingType<
+  F extends (type: any, props: any, ...rest: any[]) => any,
+>(render: F): F {
+  if (renderWrappers.has(render)) return render
+  const wrapper = ((type: any, props: any, ...rest: any[]) =>
+    render(resolveType(type, props), props, ...rest)) as F
+  renderWrappers.add(wrapper)
+  return wrapper
+}
+
+// Slack can expose the same React from more than one export object
 export const reactPromise: Promise<typeof import('react')> = new Promise(
   (resolve) => {
     forEachExport(isReact, (React) => {
-      const originalCreateElement = React.createElement
-      React.createElement = (type: any, props: any, ...children: any[]) =>
-        originalCreateElement(resolveType(type, props), props, ...children)
+      React.createElement = resolvingType(React.createElement)
       global.React = React
       resolve(React)
     })
@@ -553,12 +564,8 @@ export const reactPromise: Promise<typeof import('react')> = new Promise(
 
 const jsxRuntimePromise: Promise<void> = new Promise((resolve) => {
   forEachExport(isJsxRuntime, (rt) => {
-    const originalJsx = rt.jsx as (type: any, props: any, key: any) => any
-    const originalJsxs = rt.jsxs as (type: any, props: any, key: any) => any
-    rt.jsx = (type: any, props: any, key: any) =>
-      originalJsx(resolveType(type, props), props, key)
-    rt.jsxs = (type: any, props: any, key: any) =>
-      originalJsxs(resolveType(type, props), props, key)
+    rt.jsx = resolvingType(rt.jsx)
+    rt.jsxs = resolvingType(rt.jsxs)
     resolve()
   })
 })

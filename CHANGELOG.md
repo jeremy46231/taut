@@ -28,9 +28,9 @@ Each release is a `## x.y.z` heading, and each change is one bullet:
 - **Nicknames**: Edit all your nicknames in one list, and fix when you have multiple Slack tabs open
 - **Clear URLs**: Cleans links as you paste them, so the message box shows what you'll send, and update replacement logic
 - **Invisible Forward**: Now works in plain text and Markdown mode
-- **Faster Slack**: Smoother resizing, and an option to skip animations
 - **Slim Message Box**: Can move "Also send to channel" to a toolbar button
 - **Private Channel**: Mention any private channel by typing its ID, and fixed channel IDs being saved as channel names
+- Fixed Slack crashing on load after Slack's update on October 2
 - config.jsonc is now config.json and simplified
 - New settings page, with search, categories and a page for each plugin
 - Safe mode, in Taut settings > Advanced
