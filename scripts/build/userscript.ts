@@ -38,9 +38,7 @@ async function buildVariant(variant: Variant, headerRaw: string) {
     minify: true,
     format: 'iife',
     define: {
-      __TAUT_VERSION__: JSON.stringify(versions.taut),
       __TAUT_LOADER_VERSION__: JSON.stringify(versions.userscript),
-      __TAUT_BUNDLED_PLUGINS__: JSON.stringify({}),
       __TAUT_OPTIONS_HTML__: JSON.stringify(optionsHtml),
       __TAUT_EMBEDDED__: String(embedded),
       __TAUT_APP_JS__: JSON.stringify(tautAppJs),

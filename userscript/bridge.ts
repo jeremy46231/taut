@@ -1,12 +1,12 @@
 // Taut userscript bridge: TautBridge on GM_* APIs
 
-import { defaultUserCss } from '../app/bundledData'
 import type {
   BlobStore,
   TautBridge,
   TautCookie,
   Unsubscribe,
 } from '../shared/TautBridge'
+import { defaultUserCss } from '../shared/userCss'
 
 declare const __TAUT_LOADER_VERSION__: string
 

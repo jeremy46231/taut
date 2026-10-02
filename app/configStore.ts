@@ -2,7 +2,7 @@
 
 import type { DefaultConfig, JsonValue } from '../shared/Plugin'
 import type { TautBridge } from '../shared/TautBridge'
-import { defaultUserCss } from './bundledData'
+import { defaultUserCss } from '../shared/userCss'
 import { initJsonc, type ParseError } from './cdn'
 import { deepEqual } from './helpers'
 import { withoutDefaults } from './pluginConfig'
