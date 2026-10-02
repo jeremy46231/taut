@@ -70,25 +70,30 @@ export default class RestrictedChannelWarning extends TautPlugin<
             {...props}
             allowWrap
             roadblockMessage={
-              <>
-                {props.roadblockMessage}
+              <span className="taut-restricted-channel">
+                <span>{props.roadblockMessage}</span>
                 <this.api.elements.Button
-                  className="taut-restricted-channel__post"
                   size="small"
                   type="outline"
                   onClick={() => this.ignore(channelId)}
                 >
                   Post anyway
                 </this.api.elements.Button>
-              </>
+              </span>
             }
           />
         )
       }
     )
-    this.api.setStyle(
-      '.taut-restricted-channel__post { margin-left: 8px; vertical-align: middle; }'
-    )
+    this.api.setStyle(`
+      .taut-restricted-channel {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 4px 8px;
+      }
+    `)
   }
 
   /** where you could post if you weren't an admin (only if that differs) (unless ignored) */

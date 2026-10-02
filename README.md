@@ -149,7 +149,7 @@ Make sure to hit the correct save button!
 | Custom plugins | **Install and update them in settings, no reload** | No | No |
 | Updates | **Updates when you reload Slack, desktop app updates itself** | Asks to update | Manual |
 | Depends on your Slack install | **No** | Yes | **No** |
-| Privacy | Blocks Slack's tracking, has a user counter you can turn off | Blocks Slack's tracking | - |
+| Privacy | Blocks Slack's tracking, has opt-out usage statistics | Blocks Slack's tracking | - |
 | Last updated | **Active** | **Active** | July 2026 |
 | License | GPLv3 or later | GPLv3 | None listed |
 
@@ -178,7 +178,7 @@ Install with `npm ci` (Node 22.18+), or `bun install`.
 | --- | --- |
 | `npm run dev` | Serves a live-rebuilding bundle on `localhost:3000` for the `Dev server` source |
 | `npm run build` | Builds the app, extensions and userscript into `dist/` |
-| `npm run build -- desktop mac win` | Builds the desktop app for those platforms (slow), `npm run build -- --help` lists every target |
+| `npm run build -- desktop mac win` | Builds the desktop app for those platforms (slow), `--help` for more |
 | `npm run check` | Lints and typechecks |
 | `npm run readme` | Rewrites the plugin list above from each plugin's `pluginName`, `description` and `category` |
 

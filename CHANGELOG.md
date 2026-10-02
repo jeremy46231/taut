@@ -11,7 +11,7 @@ Each release is a `## x.y.z` heading, and each change is one bullet:
 
 ## 3.0.1
 
-- Fixed Slack never loading for some people after Slack's latest update
+- Fixed Slack never loading for some people after Slack's second update on October 1st
 
 ## 3.0.0
 
@@ -34,7 +34,7 @@ Each release is a `## x.y.z` heading, and each change is one bullet:
 - **Invisible Forward**: Now works in plain text and Markdown mode
 - **Slim Message Box**: Can move "Also send to channel" to a toolbar button
 - **Private Channel**: Mention any private channel by typing its ID, and fixed channel IDs being saved as channel names
-- Fixed Slack crashing on load after Slack's update on October 2
+- Fixed Slack crashing on load after Slack's update on October 1st
 - config.jsonc is now config.json and simplified
 - New settings page, with search, categories and a page for each plugin
 - Safe mode, in Taut settings > Advanced
@@ -48,7 +48,7 @@ Each release is a `## x.y.z` heading, and each change is one bullet:
 
 ## 2.14.3
 
-- Fixed Taut not loading after Slack's update on September 29
+- Fixed Taut not loading after Slack's update on September 29th
 
 ## 2.14.2
 

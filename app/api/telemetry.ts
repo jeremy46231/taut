@@ -29,11 +29,17 @@ export class Telemetry {
 
   private async pingIfDue(): Promise<void> {
     if (this.configStore.getConfig().telemetry === false) return
-    const today = new Date().toISOString().slice(0, 10)
     try {
-      if ((await this.store.read('lastPing')) === today) return
       const team = getActiveTeam()
       if (!team?.id || !team.user_id) return
+      const ping = JSON.stringify({
+        day: new Date().toISOString().slice(0, 10),
+        user: team.user_id,
+        team: team.id,
+        version: __TAUT_VERSION__,
+        loaderVersion: this.bridge.loaderVersion,
+      })
+      if ((await this.store.read('lastPing')) === ping) return
 
       let install = await this.store.read('install')
       if (!install) {
@@ -56,7 +62,7 @@ export class Telemetry {
           os: navigator.platform,
         }),
       })
-      if (response.ok) await this.store.write('lastPing', today)
+      if (response.ok) await this.store.write('lastPing', ping)
     } catch {
       // offline or the server is down or smth
     }
