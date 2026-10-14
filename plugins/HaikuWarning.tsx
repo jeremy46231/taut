@@ -277,7 +277,14 @@ type RichTextNode = {
   timestamp?: number
   format?: string
   fallback?: string
-  style?: string | Record<string, unknown>
+  style?:
+    | string
+    | {
+        bold?: boolean
+        italic?: boolean
+        strike?: boolean
+        code?: boolean
+      }
   indent?: number
   offset?: number
   elements?: RichTextNode[]
@@ -286,6 +293,44 @@ type RichTextNode = {
 /** Slack escapes these three in message text */
 const escapeText = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/** inline text carries the style markers Slack adds (*bold*, _italic_, ~strike~, `code`) */
+function inlineText(nodes: RichTextNode[]): string {
+  let result = ''
+  let run = ''
+  let markers = ''
+  const flush = () => {
+    result += markers
+      ? run.replace(
+          /^(\s*)([\s\S]*?\S)(\s*)$/,
+          `$1${markers}$2${[...markers].reverse().join('')}$3`
+        )
+      : run
+  }
+  for (const node of nodes) {
+    const style = typeof node.style === 'object' ? node.style : {}
+    const next = style.code
+      ? '`'
+      : `${style.bold ? '*' : ''}${style.italic ? '_' : ''}${style.strike ? '~' : ''}`
+    if (next !== markers) {
+      flush()
+      run = ''
+      markers = next
+    }
+    run += nodeText(node)
+  }
+  flush()
+  return result
+}
+
+/** joins blocks without doubling or dropping the newlines between them */
+function joinSections(sections: string[]): string {
+  return sections.reduce((text, next) => {
+    const separator =
+      text && next && !text.endsWith('\n') && !next.startsWith('\n') ? '\n' : ''
+    return text + separator + next
+  }, '')
+}
 
 function listText(list: RichTextNode): string {
   const indent = '    '.repeat(list.indent ?? 0)
@@ -314,15 +359,18 @@ function nodeText(node: RichTextNode): string {
       return `:${node.name}:${node.skin_tone ? `:skin-tone-${node.skin_tone}:` : ''}`
     case 'date':
       return `<!date^${node.timestamp}^${node.format}|${escapeText(node.fallback ?? '')}>`
+    case 'rich_text':
+    case 'expanded_rich_text':
+      return joinSections((node.elements ?? []).map(nodeText))
     case 'rich_text_list':
       return listText(node)
     case 'rich_text_quote':
-      return nodeText({ elements: node.elements })
+      return inlineText(node.elements ?? [])
         .split('\n')
         .map((line) => `&gt; ${line}`)
         .join('\n')
     case 'rich_text_preformatted':
-      return `\`\`\`${nodeText({ elements: node.elements })}\`\`\``
+      return `\`\`\`${(node.elements ?? []).map(nodeText).join('')}\`\`\``
   }
   // pasted file and canvas links are sent as the file's id
   if (node.file_id) return node.file_id
@@ -331,19 +379,7 @@ function nodeText(node: RichTextNode): string {
     const url = escapeText(node.url)
     return node.text ? `<${url}|${escapeText(node.text)}>` : `<${url}>`
   }
-  const children = node.elements ?? []
-  if (node.type !== 'rich_text') return children.map(nodeText).join('')
-  // a section runs on into the next, the other blocks end their line
-  return children
-    .map((child, i) => {
-      const next = children[i + 1]
-      const ownLine =
-        next &&
-        (child.type !== 'rich_text_section' ||
-          next.type !== 'rich_text_section')
-      return ownLine ? `${nodeText(child)}\n` : nodeText(child)
-    })
-    .join('')
+  return inlineText(node.elements ?? [])
 }
 
 /** recreates the mrkdwn text Slack delivers with a message event */
