@@ -1,6 +1,6 @@
 // Warns before you send a haiku that Orpheus would repeat in the thread
 
-import { TautPlugin } from '$taut'
+import { opt, TautPlugin } from '$taut'
 
 const DICTIONARY_COMMIT = 'aece7f5fcc873b8e71ecccfa5216849fafd959e1'
 const DICTIONARY_URL = `https://raw.githubusercontent.com/hackclub/orpheus-bot/${DICTIONARY_COMMIT}/app/lib/haiku_check/syllable_counts.txt`
@@ -37,6 +37,18 @@ export default class HaikuWarning extends TautPlugin<typeof HaikuWarning> {
   static readonly hackClubOnly = true
   static readonly defaultConfig = {
     enabled: false,
+    holdSend: opt(
+      false,
+      'Hold the first send of a haiku, send again to send anyway'
+    ),
+    popup: opt(
+      false,
+      'Use a pop-up when you send, instead of a live banner as you type'
+    ),
+    anyChannel: opt(
+      false,
+      "Also warn where Orpheus isn't, like DMs and private channels without her"
+    ),
   }
 
   // keyed by commit, so bumping it replaces the old copy
@@ -49,8 +61,14 @@ export default class HaikuWarning extends TautPlugin<typeof HaikuWarning> {
   /** conversations whose Orpheus membership has been checked */
   private readonly lookedUp = new Set<string>()
 
+  /** the haiku the last send was held for, typing forgets it */
+  private held: string | null = null
+
   start(): void {
     this.loadDictionary()
+
+    if (this.config.popup || this.config.holdSend) this.startSendCheck()
+    if (this.config.popup) return
 
     // when multiple bars, combine them
     this.api.setStyle(`
@@ -96,11 +114,90 @@ export default class HaikuWarning extends TautPlugin<typeof HaikuWarning> {
     )
   }
 
+  /** holds a send for a haiku, with a pop-up or by sending again */
+  private startSendCheck(): void {
+    this.api.redux.patchThunk(
+      'currentUserStartedTyping',
+      (original) =>
+        (...args: unknown[]) => {
+          this.held = null
+          return original(...args)
+        }
+    )
+    this.api.composer.addSendCheck(async (blocks, { channelId, threadTs }) => {
+      const dictionary = this.dictionary.get()
+      if (SKIPPED_CHANNELS.includes(channelId)) return true
+      if (!dictionary) {
+        this.loadDictionary()
+        return true
+      }
+      try {
+        if (!this.config.anyChannel && !this.orpheusIn(channelId)) return true
+        const text = blocksToSlackText(blocks)
+        // Orpheus skips messages this long, counted in code points like Ruby
+        if ([...text].length >= 300) return true
+        const haiku = findHaiku(text, (word) =>
+          dictionaryLookup(dictionary, word)
+        )
+        if (!haiku) return true
+
+        if (this.config.popup) return await this.confirmPopup(haiku)
+
+        const key = `${channelId}\n${threadTs ?? ''}\n${haiku.join('\n')}`
+        if (this.held === key) {
+          this.held = null
+          return true
+        }
+        this.held = key
+        return false
+      } catch (error) {
+        this.log('Could not check message', error)
+        return true
+      }
+    })
+  }
+
+  private confirmPopup(haiku: string[]): Promise<boolean> {
+    return this.api.modal.confirm({
+      title: (
+        <this.api.elements.MrkdwnElement text=":orpheus-woah: Found a haiku in your message!" />
+      ),
+      confirmText: 'Send anyway',
+      cancelText: 'Keep editing',
+      body: (
+        <>
+          <p style={{ marginTop: 0 }}>
+            If Orpheus is in this channel, she'll repeat it in the thread, where
+            you can't delete it.
+          </p>
+          <blockquote style={{ whiteSpace: 'pre-line' }}>
+            {haiku.join('\n')}
+          </blockquote>
+          <p style={{ marginBottom: 0 }}>
+            <code>/disable-haiku</code> stops Orpheus from repeating your
+            haikus.
+          </p>
+        </>
+      ),
+    })
+  }
+
+  /** whether Orpheus would reply in a conversation, as far as Slack knows */
+  private orpheusIn(channelId: string): boolean {
+    const state = this.api.redux.getRawState()
+    const channel = state?.channels?.[channelId]
+    if (channel?.is_channel && !channel.is_private) return true
+    const known = state?.membership?.[channelId]?.[ORPHEUS_USER]
+    return !!known?.isKnown && !!known.isMember
+  }
+
   /** whether a composer's draft is a haiku Orpheus would find, as it's typed */
   private useHaiku({ channelId, draftId }: ContextBarProps) {
     const present = this.useOrpheusIn(channelId)
     const checked =
-      !!channelId && !SKIPPED_CHANNELS.includes(channelId) && !!present
+      !!channelId &&
+      !SKIPPED_CHANNELS.includes(channelId) &&
+      (this.config.anyChannel || !!present)
     const dictionary = this.dictionary.use()
     const ops = this.api.redux.useReduxState((state): unknown[] | undefined =>
       draftId ? state?.drafts?.unifiedDrafts?.[draftId]?.ops : undefined
