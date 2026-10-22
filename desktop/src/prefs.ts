@@ -19,6 +19,8 @@ interface TautPrefs {
   appUrl?: string
   notifPrompted?: boolean
   signing?: string
+  /** create windows see-through for native Liquid Glass, see liquidGlass.ts */
+  liquidGlass?: boolean
 }
 
 let cached: TautPrefs | null = null
@@ -50,4 +52,8 @@ export function getNotifPrompted(): boolean {
 
 export function getSigning(): string | undefined {
   return cached?.signing
+}
+
+export function getLiquidGlass(): boolean {
+  return cached?.liquidGlass ?? false
 }

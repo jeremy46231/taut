@@ -18,6 +18,12 @@ export type {
   SelectOption,
   TimePickerProps,
 } from '../app/api/elements'
+export type {
+  GlassAPI,
+  GlassOptions,
+  GlassShape,
+  GlassState,
+} from '../app/api/glass'
 export type { MenuProps } from '../app/api/menu'
 export type { ModalHandle, OpenModalOptions } from '../app/api/modal'
 export type { StoredStore } from '../app/api/pluginStorage'

@@ -1,5 +1,6 @@
 // Builds and packages the Taut desktop app with electron-builder
 
+import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { access, cp, mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -42,6 +43,22 @@ const BUILD_ROOT = path.join(DESKTOP, 'build')
 const STAGE = path.join(BUILD_ROOT, 'app')
 const ICON = path.join(ASSETS, 'logo.png')
 const MAC_ICON = path.join(ASSETS, 'icons', 'mac', 'taut.icns')
+
+/** native Liquid Glass for macOS, compiled here since it is a few hundred lines and has no dependencies */
+async function stageLiquidGlass() {
+  const dir = path.join(DESKTOP, 'liquid-glass')
+  if (process.platform !== 'darwin') {
+    console.warn('[build-desktop] skipping Liquid Glass, it builds on macOS')
+    return
+  }
+  execFileSync('sh', [path.join(dir, 'build.sh')], { stdio: 'inherit' })
+  for (const arch of ['arm64', 'x86_64']) {
+    await cp(
+      path.join(dir, `glass-${arch}.node`),
+      path.join(STAGE, `glass-${arch}.node`)
+    )
+  }
+}
 
 export async function buildDesktopJs(
   variant: Variant,
@@ -87,6 +104,7 @@ export async function buildDesktopJs(
   const options = await renderOptions('electron', isEmbedded)
   await writeFile(path.join(STAGE, 'options.html'), options.html)
   await writeFile(path.join(STAGE, 'options.js'), options.js)
+  await stageLiquidGlass()
   await cp(ICON, path.join(STAGE, 'icon.png'))
   await cp(
     path.join(DESKTOP, 'src', 'download.html'),
@@ -134,6 +152,8 @@ function makeConfig(
     productName: 'Taut',
     electronVersion: versions.electron,
     asar: true,
+    // a native module can't be loaded from inside the archive
+    asarUnpack: ['build/app/glass-*.node'],
     npmRebuild: false,
     nodeGypRebuild: false,
     directories: { output: path.join(BUILD_ROOT, 'builder', variant) },

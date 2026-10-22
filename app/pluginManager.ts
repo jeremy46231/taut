@@ -12,6 +12,7 @@ import { AccountSwitcher } from './api/accountSwitcher'
 import { bindCache } from './api/cache'
 import { setStyle } from './api/css'
 import { elementsAPIPromise } from './api/elements'
+import { glassAPI } from './api/glass'
 import { menuAPIPromise } from './api/menu'
 import {
   dialogHelpersFor,
@@ -157,6 +158,7 @@ async function makeBaseTautAPI(bridge: NormalizedBridge) {
     menu: await menuAPIPromise,
     elements: await elementsAPIPromise,
     preferences,
+    glass: glassAPI(bridge),
     commonModules: {
       react: await reactPromise,
     },
@@ -281,6 +283,29 @@ function joinBlobStores(parts: Record<string, BlobStore>): BlobStore {
 }
 
 /** a plugin's `this.api`, registrations undone when it stops and storage scoped to its id */
+/** glass and the hidden window buttons are put back as they were when the plugin stops */
+function scopedGlass(glass: BaseTautAPI['glass'], scope: PluginScope) {
+  let shown = false
+  let buttons = false
+  return {
+    ...glass,
+    set: (...args: Parameters<typeof glass.set>) => {
+      if (!shown) {
+        shown = true
+        scope.track(() => glass.set(null))
+      }
+      glass.set(...args)
+    },
+    hideWindowButtons: (hide: boolean) => {
+      if (hide && !buttons) {
+        buttons = true
+        scope.track(() => glass.hideWindowButtons(false))
+      }
+      glass.hideWindowButtons(hide)
+    },
+  }
+}
+
 function createScopedAPI(
   base: BaseTautAPI,
   id: string,
@@ -368,6 +393,7 @@ function createScopedAPI(
       ...base.preferences,
       addTab: tracked(base.preferences.addTab),
     },
+    glass: scopedGlass(base.glass, scope),
     sharedFrom: <T>(pluginId: string, key: string) => {
       const handle = base.sharedFrom<T>(pluginId, key)
       return { ...handle, subscribe: tracked(handle.subscribe) }

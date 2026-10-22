@@ -131,6 +131,7 @@ export function normalizeBridge(raw: TautBridge): NormalizedBridge {
       ? call(raw.deleteSecret)
       : (key: string) => call(raw.writeSecret)(key, ''),
     PATHS: raw.PATHS,
+    glass: raw.glass,
   }
 
   if (raw.bridgeVersion >= 3) {

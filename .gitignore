@@ -12,3 +12,6 @@ desktop/native/
 desktop/sounds/
 .env
 .claude/worktrees/
+
+# built by desktop/liquid-glass/build.sh
+desktop/liquid-glass/*.node

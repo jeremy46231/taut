@@ -5,6 +5,7 @@ import { readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 import { app, ipcMain, Menu, MenuItem, shell } from 'electron'
+import { glassWindows } from './liquidGlass.js'
 import { redirectNativeModules } from './nativeModules.js'
 import { configDir } from './paths.js'
 import { checkForUpdates } from './updates.js'
@@ -189,6 +190,10 @@ export function applyPatches(slackAsarPath: string, tautPreloadPath: string) {
       }
       return new Target({
         ...opts,
+        // the compositor can only be see-through if the window starts out that way, which native Liquid Glass needs
+        ...(glassWindows()
+          ? { transparent: true, backgroundColor: '#00000000' }
+          : {}),
         webPreferences: {
           ...opts.webPreferences,
           preload: tautPreloadPath,
@@ -197,6 +202,11 @@ export function applyPatches(slackAsarPath: string, tautPreloadPath: string) {
       })
     },
   })
+
+  if (glassWindows()) {
+    // Slack paints its window a solid color, which would hide the glass underneath the page
+    OrigBrowserWindow.prototype.setBackgroundColor = () => {}
+  }
 
   const origSetAppMenu = electronCjs.Menu.setApplicationMenu.bind(
     electronCjs.Menu

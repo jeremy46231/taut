@@ -113,6 +113,14 @@ export type TautBridge = {
   /** awaited once before the app reads config (desktop starts its file watchers, the userscript seeds user.css) */
   start(): Promise<void>
 
+  /** native Liquid Glass, desktop on macOS only, see app/api/glass.ts */
+  glass?: {
+    state(): Promise<{ supported: boolean; ready: boolean }>
+    enable(on: boolean): Promise<boolean>
+    chrome(hide: boolean): void
+    set(shapes: unknown[] | null, options?: object): void
+  }
+
   readConfigText(): Promise<string>
 
   /** true on success */

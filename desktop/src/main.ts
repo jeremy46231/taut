@@ -19,6 +19,7 @@ import {
 import { installAppImageDesktopEntry } from './appImage.js'
 import { startAutoUpdate } from './autoUpdate.js'
 import { setupBridge } from './bridge.js'
+import { setupLiquidGlass } from './liquidGlass.js'
 import { applyPatches, setOpenOptionsWindow } from './patch.js'
 import { configDir } from './paths.js'
 import {
@@ -190,6 +191,7 @@ function startSlack(slackAsarPath: string) {
     resetStaleMacPermissions()
     requestNotificationPermission()
     setupSession(realResourcesPath)
+    setupLiquidGlass()
     startAutoUpdate()
 
     if (process.env.TAUT_REACT_DEVTOOLS !== '1') return

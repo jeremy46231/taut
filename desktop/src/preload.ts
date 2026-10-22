@@ -129,6 +129,14 @@ if (isClientPage) {
       clear: () => call('blobClear', [namespace]).catch(() => false),
     }),
 
+    glass: {
+      state: () => ipcRenderer.invoke('taut:glass-state'),
+      enable: (on: boolean) => ipcRenderer.invoke('taut:glass-enable', on),
+      chrome: (hide: boolean) => ipcRenderer.send('taut:glass-chrome', hide),
+      set: (shapes: unknown[] | null, options?: object) =>
+        ipcRenderer.send('taut:glass-set', shapes, options),
+    },
+
     start: () => ipcRenderer.invoke('taut:setup-watchers'),
 
     readConfigText: () => call('readConfigText', []),
