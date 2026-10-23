@@ -47,6 +47,11 @@ export const AUTHORS = {
     url: 'https://izie.top',
   },
   adryd: { name: 'adryd', url: 'https://adryd.com' },
+  fantamomo: {
+    name: 'Fantamomo',
+    slackId: 'U0905G0BRU5',
+    url: 'https://github.com/Fantamomo',
+  },
 } as const satisfies Record<string, Author>
 
 export type AuthorKey = keyof typeof AUTHORS
