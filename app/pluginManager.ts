@@ -25,6 +25,7 @@ import {
   secretBlobStore,
 } from './api/pluginStorage'
 import { preferences } from './api/preferences'
+import { RateLimit } from './api/rateLimit'
 import { deferResizeWork } from './api/resize'
 import { bindSharedStore, SharedStore, sharedFrom } from './api/sharedStore'
 import { userAPI } from './api/userAPI'
@@ -151,6 +152,7 @@ async function makeBaseTautAPI(bridge: NormalizedBridge) {
     workspace,
     fetch: bridge.fetch.bind(bridge),
     userAPI,
+    RateLimit,
     cookies: bridge.cookies ?? null,
     accounts: new AccountSwitcher(bridge),
     modal: await modalAPIPromise,

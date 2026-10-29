@@ -12,6 +12,12 @@ type Shortcut = {
 
 type NotificationArgs = { message?: unknown }
 type MessageProps = { msg?: { channel?: string }; className?: string }
+type ActivityProps = {
+  activityItem?: { channelId?: string }
+  className?: string
+  children?: React.ReactNode
+}
+type Constraints = { video?: { mandatory?: { chromeMediaSource?: string } } }
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform)
 
@@ -58,30 +64,47 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
     hideVip: opt(true, 'Hide VIP badges and icons', {
       label: 'Hide VIP',
     }),
-    silenceNotifications: true,
-    autoOnScreenShare: true,
+    silenceNotifications: opt(
+      true,
+      "Disable Slack notifications while it's on"
+    ),
+    autoOnScreenShare: opt(true, 'Turn it on while you share your screen', {
+      label: 'On while screen sharing',
+    }),
+    alwaysOn: opt(false, 'Keep it on, with no button or shortcut'),
   }
 
-  private active = new this.api.SharedStore<boolean>(
+  // the localStorage copy is read synchronously so boot doesn't flash unblurred
+  private active = this.api.storage.store(
     'active',
     localStorage.getItem('taut_streamer_mode_active') === 'true'
   )
   /** a screen share turned it on, so the share ending turns it off */
   private autoActivated = false
-  private originalGetDisplayMedia: MediaDevices['getDisplayMedia'] | null = null
 
   start() {
-    this.apply(this.active.get())
     this.api.setStyle(this.css(), 'streamer')
-    this.injectButton()
+    this.markPrivateThreads()
+    this.markPrivateActivity()
+    this.followThreadHover()
+    this.patchNotifications()
 
-    if (this.config.silenceNotifications) {
-      this.api.redux.patchThunk(
-        'showNotification',
-        (original) => (args: NotificationArgs) =>
-          original(this.active.get() ? { ...args, message: undefined } : args)
-      )
+    if (this.config.alwaysOn) {
+      document.documentElement.classList.add('taut-streamer-mode')
+      this.log('Started')
+      return
     }
+
+    const apply = () => {
+      const active = this.active.get()
+      if (!active) this.autoActivated = false
+      document.documentElement.classList.toggle('taut-streamer-mode', active)
+      localStorage.setItem('taut_streamer_mode_active', String(active))
+    }
+    apply()
+    this.api.signal.addEventListener('abort', this.active.subscribe(apply))
+
+    this.injectButton()
 
     const shortcut = parseShortcut(this.config.shortcut)
     if (shortcut) {
@@ -101,71 +124,136 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
       )
     }
 
-    this.markPrivateThreads()
-    this.followThreadHover()
     if (this.config.autoOnScreenShare) this.watchScreenShares()
     this.log('Started')
   }
 
   stop() {
     document.documentElement.classList.remove('taut-streamer-mode')
-    if (this.originalGetDisplayMedia) {
-      navigator.mediaDevices.getDisplayMedia = this.originalGetDisplayMedia
-      this.originalGetDisplayMedia = null
-    }
   }
 
   private toggle = () => {
     this.autoActivated = false
-    this.apply(!this.active.get())
-    localStorage.setItem('taut_streamer_mode_active', String(this.active.get()))
+    this.setActive(!this.active.get())
   }
 
-  private apply(active: boolean) {
-    this.active.set(active)
-    document.documentElement.classList.toggle('taut-streamer-mode', active)
+  private setActive(active: boolean) {
+    this.active
+      .set(active)
+      .catch((err) => this.log("Couldn't save whether it's on", err))
+  }
+
+  private patchNotifications() {
+    if (!this.config.silenceNotifications) return
+    this.api.redux.patchThunk(
+      'showNotification',
+      (original) => (args: NotificationArgs) =>
+        original(
+          this.config.alwaysOn || this.active.get()
+            ? { ...args, message: undefined }
+            : args
+        )
+    )
   }
 
   private watchScreenShares() {
     const media = navigator.mediaDevices
-    if (typeof media?.getDisplayMedia !== 'function') return
-    const original = media.getDisplayMedia.bind(media)
-    this.originalGetDisplayMedia = media.getDisplayMedia
+    if (!media) return
+    const { getDisplayMedia, getUserMedia } = media
     const shares = new Set<MediaStream>()
     const ended = (stream: MediaStream) => {
       shares.delete(stream)
       if (shares.size || !this.autoActivated) return
       this.autoActivated = false
-      this.apply(false)
+      this.setActive(false)
     }
-    media.getDisplayMedia = async (...args) => {
-      const stream = await original(...args)
-      if (this.api.signal.aborted) return stream
+    const started = (stream: MediaStream) => {
+      if (this.api.signal.aborted) return
       shares.add(stream)
       if (!this.active.get()) {
+        this.setActive(true)
         this.autoActivated = true
-        this.apply(true)
       }
       for (const track of stream.getTracks())
         track.addEventListener('ended', () => ended(stream), { once: true })
       stream.addEventListener('inactive', () => ended(stream), { once: true })
-      return stream
     }
+    if (typeof getDisplayMedia === 'function') {
+      media.getDisplayMedia = async (...args) => {
+        const stream = await getDisplayMedia.apply(media, args)
+        started(stream)
+        return stream
+      }
+    }
+    // slack's desktop apps capture a screen share through getUserMedia with a desktop source
+    if (typeof getUserMedia === 'function') {
+      media.getUserMedia = async (...args) => {
+        const stream = await getUserMedia.apply(media, args)
+        const constraints = args[0] as Constraints | undefined
+        if (constraints?.video?.mandatory?.chromeMediaSource === 'desktop')
+          started(stream)
+        return stream
+      }
+    }
+    this.api.signal.addEventListener('abort', () => {
+      media.getDisplayMedia = getDisplayMedia
+      media.getUserMedia = getUserMedia
+    })
+  }
+
+  /** the kind of a conversation that isn't public, from redux */
+  private useKind(channelId: string | undefined) {
+    return this.api.redux.useReduxState((state) => {
+      const channel = channelId ? state?.channels?.[channelId] : undefined
+      if (channel?.is_im) return 'dm'
+      if (channel?.is_mpim) return 'group'
+      if (channel?.is_private) return 'private'
+      return undefined
+    })
   }
 
   private markPrivateThreads() {
     this.api.patchComponent<MessageProps>(
       'MessageBackground',
       (Original) => (props) => {
-        const id = props.msg?.channel
-        const channel = id ? this.api.channels.getCachedChannel(id) : undefined
-        if (!channel?.is_private && !channel?.is_mpim)
-          return <Original {...props} />
+        const kind = this.useKind(props.msg?.channel)
+        if (!kind) return <Original {...props} />
         return (
           <Original
             {...props}
             className={`${props.className ?? ''} taut-streamer-mode__private-thread`}
           />
+        )
+      }
+    )
+  }
+
+  private markPrivateActivity() {
+    this.api.patchComponent<ActivityProps>(
+      'ActivityItem',
+      (Original) => (props) => {
+        const kind = this.useKind(props.activityItem?.channelId)
+        if (!kind) return <Original {...props} />
+        return (
+          <Original
+            {...props}
+            className={`${props.className ?? ''} taut-streamer-mode__activity taut-streamer-mode__activity--${kind}`}
+          />
+        )
+      }
+    )
+    // slack wraps the names its privacy mode can blur (sender, channel, group) in this
+    this.api.patchComponent<ActivityProps>(
+      'ActivityPrivacyBlurredName',
+      (Original) => (props) => {
+        const kind = this.useKind(props.activityItem?.channelId)
+        if (!kind) return <Original {...props} />
+        return (
+          <Original {...props}>
+            <span className="taut-streamer-mode__activity-name">
+              {props.children}
+            </span>
+          </Original>
         )
       }
     )
@@ -287,11 +375,9 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
     }[channelListReveal]
     const activityRow = '[data-qa="activity-item-container"]'
     const preview = '[data-qa="activity-item-message"]'
-
-    const destination = '.p-activity_row_content__destination_tag'
-
-    const privateDestination = `${destination}:has(${lock})`
-    const groupDestination = `${destination}:not(:has(.c-inline_channel_entity))`
+    const activityOf = (kind: string) =>
+      `.taut-streamer-mode__activity--${kind}`
+    const activityName = '.taut-streamer-mode__activity-name'
 
     const dmsRow =
       '[data-qa="dms_channel"]:not(:has(.p-activity_ia4_page__item--selected))'
@@ -307,26 +393,25 @@ export default class StreamerMode extends TautPlugin<typeof StreamerMode> {
 
     const mention = `.c-inline_channel_entity:has(${lock}):not(${activityRow} *) .c-channel_entity__name`
 
-    const inRow = `:is(${preview}, ${destination}, [data-qa="dms-channel-sender-name"])`
+    const inRow = `:is(${preview}, ${activityName}, [data-qa="dms-channel-sender-name"])`
     const blurred = [
       ...(privateChannelNames
         ? [
             `${root} ${sidebarRowOf(privateType)} .p-channel_sidebar__name`,
             `${root} ${mention}`,
-            `${root} ${activityRow} ${privateDestination}`,
+            `${root} ${activityOf('private')} ${activityName}`,
             `${root} ${suggestionOf(privateSuggestion)} ${suggestionText}`,
           ]
         : []),
       ...(dmPreviewBlur === 'all'
         ? [
             `${root} ${sidebarRowOf(groupType)} .p-channel_sidebar__name`,
-            `${root} ${activityRow} ${groupDestination}`,
+            `${root} ${activityOf('group')} ${activityName}`,
             `${root} ${groupName}`,
             `${root} ${suggestionOf(groupSuggestion)} ${suggestionText}`,
           ]
         : []),
-      `${root} ${activityRow}:has(${lock}) ${preview}`,
-      `${root} ${activityRow}:has([data-qa="direct-messages"]) ${preview}`,
+      `${root} .taut-streamer-mode__activity ${preview}`,
       `${root} ${dmsRow} ${preview}`,
       `${root} .p-threads_view ${threadBody}`,
     ]

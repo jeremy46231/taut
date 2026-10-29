@@ -9,6 +9,12 @@ Each release is a `## x.y.z` heading, and each change is one bullet:
 - `- **Plugin Name**: Fixed what was broken` for a plugin fix
 - `- What changed` for a change to Taut itself
 
+## 3.6.0
+
+- **Streamer Mode**: Blurs DM previews in Activity again, turns on when you share your screen in the desktop app, stays in sync across tabs, and can stay on all the time
+- **Show Real User**: Greatly reduces the number of requests sent
+- **Slack Fixes**: Fixes Slack's thread admin tools not showing on threads started by bots
+
 ## 3.5.0
 
 - **Better Typing Indicator** (new plugin): Shows as many typing people as possible and lets you view their profiles

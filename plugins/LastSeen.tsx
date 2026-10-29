@@ -22,11 +22,8 @@ type StoreMessage = {
 const MAX_SEEN = 2000
 const SCAN_EVERY = 15_000
 const SAVE_EVERY = 15_000
-// search.messages is tier 2 (about 20 a minute)
-const SEARCHES_PER_MINUTE = 15
 
 type Sightings = Record<string, number>
-type Search = { at: number; id: string }
 
 export default class LastSeen extends TautPlugin<typeof LastSeen> {
   static readonly id = 'LastSeen'
@@ -63,8 +60,11 @@ export default class LastSeen extends TautPlugin<typeof LastSeen> {
   /** sightings newer than `seen`, saved in a batch */
   private unsaved = new Map<string, number>()
   private saveTimer: ReturnType<typeof setTimeout> | undefined
-  /** recent searches from every tab, sharing one rate limit */
-  private searches = this.api.storage.store<Search[]>('searches', [])
+  // search.messages is tier 2 (about 20 a minute)
+  private searches = new this.api.RateLimit('search.messages', {
+    max: 15,
+    window: 60_000,
+  })
   /** how many mounted views want each person's last message */
   private readers = new Map<string, number>()
 
@@ -241,28 +241,13 @@ export default class LastSeen extends TautPlugin<typeof LastSeen> {
 
   /** resolves when a search fits under the rate limit, throws if nobody wants `userId` by then */
   private async searchTurn(userId: string) {
-    const id = crypto.randomUUID()
-    let recent = await this.takeSearch(id)
-    while (!recent.some((search) => search.id === id)) {
-      const oldest = Math.min(...recent.map((search) => search.at))
-      await new Promise((resolve) =>
-        setTimeout(resolve, oldest + 60_000 - Date.now())
-      )
+    let wait = await this.searches.take()
+    while (wait) {
+      await new Promise((resolve) => setTimeout(resolve, wait))
       if (this.api.signal.aborted) throw this.api.signal.reason
       if (!this.readers.get(userId)) throw new Error('No longer shown')
-      recent = await this.takeSearch(id)
+      wait = await this.searches.take()
     }
-  }
-
-  /** adds search `id` to the last minute's searches if there's room, and resolves with them */
-  private takeSearch(id: string) {
-    const now = Date.now()
-    return this.searches.update((searches) => {
-      const recent = searches.filter((search) => now - search.at < 60_000)
-      return recent.length < SEARCHES_PER_MINUTE
-        ? [...recent, { at: now, id }]
-        : recent
-    })
   }
 
   private lastMessageOf(userId: string) {

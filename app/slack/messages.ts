@@ -1,3 +1,4 @@
+import { RateLimit } from '../api/rateLimit'
 import { userAPI } from '../api/userAPI'
 import { Store } from '../store'
 import {
@@ -346,52 +347,189 @@ export type SlackMessageMetadata = {
 
 const metadataKnown = new Map<string, SlackMessageMetadata | null>()
 type MetadataLookup = {
+  key: string
+  channel: string
+  ts: string
   promise: Promise<SlackMessageMetadata | null>
+  resolve: (metadata: SlackMessageMetadata | null) => void
+  reject: (reason: unknown) => void
   controller: AbortController
-  /** callers still waiting, the request stops once each has aborted */
+  /** callers still waiting, if all get aborted the lookup is cancelled */
   callers: number
+  /** looked up alone, after a batch couldn't find it */
+  alone?: boolean
 }
 const metadataLookups = new Map<string, MetadataLookup>()
 const metadataFailed = new Set<string>()
 let metadataRepaint: ReturnType<typeof setTimeout> | undefined
+
+/** lookups waiting for a request, oldest first */
+const metadataQueue: MetadataLookup[] = []
+let metadataPump: ReturnType<typeof setTimeout> | undefined
+let metadataPumping = false
+// both methods are tier 3 (50+ a minute), shared with Slack's requests
+const metadataLimit = new RateLimit('message-metadata', {
+  max: 20,
+  window: 30_000,
+})
+/** how long new lookups gather before they're sent */
+const METADATA_GATHER = 50
 
 function lookUpMetadata(
   key: string,
   channel: string,
   ts: string
 ): MetadataLookup {
-  const controller = new AbortController()
-  // only conversations.replies returns the payload, and for any message
-  const promise = userAPI<{ messages?: SlackMessage[] }>(
-    'conversations.replies',
-    {
-      channel,
-      ts,
-      limit: '1',
-      inclusive: 'true',
-      include_all_metadata: 'true',
-    },
-    { rateLimitRetries: 3, signal: controller.signal }
-  )
-    .then((res) => {
-      const found = res.messages?.find((msg) => msg.ts === ts)
-      const metadata = (found?.metadata as SlackMessageMetadata) ?? null
-      metadataKnown.set(key, metadata)
-      clearTimeout(metadataRepaint)
-      metadataRepaint = setTimeout(refreshState, 100)
-      return metadata
-    })
-    .catch((err) => {
-      // or every read would ask again
-      if (!controller.signal.aborted) metadataFailed.add(key)
-      throw err
-    })
-    .finally(() => {
-      if (metadataLookups.get(key) === lookup) metadataLookups.delete(key)
-    })
-  const lookup: MetadataLookup = { promise, controller, callers: 0 }
+  let resolve!: MetadataLookup['resolve']
+  let reject!: MetadataLookup['reject']
+  const promise = new Promise<SlackMessageMetadata | null>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  const lookup: MetadataLookup = {
+    key,
+    channel,
+    ts,
+    promise,
+    resolve,
+    reject,
+    controller: new AbortController(),
+    callers: 0,
+  }
   metadataLookups.set(key, lookup)
+  metadataQueue.push(lookup)
+  scheduleMetadataPump(METADATA_GATHER)
   return lookup
+}
+
+/** sends queued lookups while the window has room, then waits for it to */
+async function pumpMetadata() {
+  metadataPump = undefined
+  metadataPumping = true
+  try {
+    while (hasMetadataQueued()) {
+      const wait = await metadataLimit.take()
+      if (wait) {
+        metadataPump = setTimeout(pumpMetadata, wait)
+        return
+      }
+      if (hasMetadataQueued()) requestMetadata(takeMetadataBatch())
+    }
+  } finally {
+    metadataPumping = false
+  }
+}
+
+/** drops aborted lookups from the front of the queue, returns whether any are left */
+function hasMetadataQueued() {
+  while (metadataQueue[0]?.controller.signal.aborted) metadataQueue.shift()
+  return metadataQueue.length > 0
+}
+
+function scheduleMetadataPump(delay?: number) {
+  if (!metadataPump && !metadataPumping)
+    metadataPump = setTimeout(pumpMetadata, delay)
+}
+
+const isThreadReply = ({ channel, ts }: MetadataLookup) => {
+  const parent = getRawMessage(channel, ts)?.thread_ts
+  return !!parent && parent !== ts
+}
+
+/** the next lookup, with every other queued one in its channel that conversations.history can find */
+function takeMetadataBatch(): MetadataLookup[] {
+  const first = metadataQueue.shift() as MetadataLookup
+  const batchable = (lookup: MetadataLookup) =>
+    !lookup.alone && !lookup.controller.signal.aborted && !isThreadReply(lookup)
+  if (!batchable(first)) return [first]
+  const batch = [first]
+  for (let i = 0; i < metadataQueue.length; ) {
+    const lookup = metadataQueue[i]
+    if (lookup.channel === first.channel && batchable(lookup))
+      batch.push(...metadataQueue.splice(i, 1))
+    else i++
+  }
+  return batch
+}
+
+function requestMetadata(batch: MetadataLookup[]) {
+  const [first] = batch
+  const times = batch.map(({ ts }) => Number(ts))
+  // only these two return the payload, history for a channel's messages and replies for any message
+  type Listing = { messages?: SlackMessage[]; has_more?: boolean }
+  const request =
+    batch.length === 1
+      ? userAPI<Listing>(
+          'conversations.replies',
+          {
+            channel: first.channel,
+            ts: first.ts,
+            limit: '1',
+            inclusive: 'true',
+            include_all_metadata: 'true',
+          },
+          { rateLimitRetries: 3, signal: first.controller.signal }
+        )
+      : userAPI<Listing>(
+          'conversations.history',
+          {
+            channel: first.channel,
+            oldest: batch[times.indexOf(Math.min(...times))].ts,
+            latest: batch[times.indexOf(Math.max(...times))].ts,
+            inclusive: 'true',
+            limit: '100',
+            include_all_metadata: 'true',
+          },
+          { rateLimitRetries: 3 }
+        )
+  request.then(
+    (res) => {
+      const found = new Map(res.messages?.map((msg) => [msg.ts, msg]))
+      // history lists newest first and stops at the limit
+      const oldest = Number(res.messages?.at(-1)?.ts)
+      const missed: MetadataLookup[] = []
+      for (const lookup of batch) {
+        const msg = found.get(lookup.ts)
+        if (msg || batch.length === 1) {
+          settleMetadata(
+            lookup,
+            (msg?.metadata as SlackMessageMetadata) ?? null
+          )
+          continue
+        }
+        // within the listed range means a thread reply or a missing message
+        lookup.alone = !res.has_more || Number(lookup.ts) >= oldest
+        missed.push(lookup)
+      }
+      if (!missed.length) return
+      metadataQueue.unshift(...missed)
+      scheduleMetadataPump()
+    },
+    (err) => {
+      for (const lookup of batch) {
+        // or every read would ask again
+        if (!lookup.controller.signal.aborted) metadataFailed.add(lookup.key)
+        forgetMetadataLookup(lookup)
+        lookup.reject(err)
+      }
+    }
+  )
+}
+
+function settleMetadata(
+  lookup: MetadataLookup,
+  metadata: SlackMessageMetadata | null
+) {
+  metadataKnown.set(lookup.key, metadata)
+  forgetMetadataLookup(lookup)
+  lookup.resolve(metadata)
+  clearTimeout(metadataRepaint)
+  metadataRepaint = setTimeout(refreshState, 100)
+}
+
+function forgetMetadataLookup(lookup: MetadataLookup) {
+  if (metadataLookups.get(lookup.key) === lookup)
+    metadataLookups.delete(lookup.key)
 }
 
 /** includes `event_payload`, null if none, looked up once with a state refresh after each burst */
@@ -403,7 +541,7 @@ export function fetchMessageMetadata(
   const key = `${channel}:${ts}`
   const known = metadataKnown.get(key)
   if (known !== undefined) return Promise.resolve(known)
-  // conversations.replies can't find them
+  // the web API can't find them
   if (getRawMessage(channel, ts)?.is_ephemeral) return Promise.resolve(null)
   if (signal?.aborted) return Promise.reject(signal.reason)
   const lookup = metadataLookups.get(key) ?? lookUpMetadata(key, channel, ts)
@@ -413,7 +551,7 @@ export function fetchMessageMetadata(
     const onAbort = () => {
       reject(signal.reason)
       if (--lookup.callers) return
-      if (metadataLookups.get(key) === lookup) metadataLookups.delete(key)
+      forgetMetadataLookup(lookup)
       lookup.controller.abort(signal.reason)
     }
     signal.addEventListener('abort', onAbort, { once: true })
