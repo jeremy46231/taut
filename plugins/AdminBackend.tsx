@@ -36,6 +36,11 @@ const TOOLS = [
     label: 'Slack Admin',
     url: 'https://app.slack.com/manage/E09V59WQY1E/people/{id}',
   },
+  {
+    value: 'attend',
+    label: 'Attend',
+    url: 'https://attend.hackclub.com/admin/users?search={id}&role=&commit=Search',
+  },
 ] as const
 
 type Preset = (typeof TOOLS)[number]['value']
