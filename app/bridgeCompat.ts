@@ -130,6 +130,12 @@ export function normalizeBridge(raw: TautBridge): NormalizedBridge {
     fetch: async (input: RequestInfo | URL, init?: RequestInit) =>
       toResponse(await raw.fetch(input, init)),
     cookies,
+    tray: raw.tray && {
+      state: call(raw.tray.state),
+      setHidden: call(raw.tray.setHidden),
+      intercept: call(raw.tray.intercept),
+      onEvent: call(raw.tray.onEvent),
+    },
     readSecret: call(raw.readSecret),
     writeSecret: call(raw.writeSecret),
     deleteSecret: raw.deleteSecret

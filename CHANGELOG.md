@@ -22,6 +22,8 @@ Each release is a `## x.y.z` heading, and each change is one bullet:
 
 ## 3.5.0
 
+- **No Slackbot Menubar** (new plugin): Hides or quiets the Slackbot Mini icon in the Mac menu bar
+- Plugins can hide Slack's menu bar icon or take over its clicks
 - **Better Typing Indicator** (new plugin): Shows as many typing people as possible and lets you view their profiles
 
 ## 3.4.0

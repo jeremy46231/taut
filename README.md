@@ -24,7 +24,7 @@ Turn plugins on and off in `Preferences` > `Taut`, where you can also write your
 
 <!-- begin plugins (written by scripts/readme.ts) -->
 
-<details><summary>All 39 plugins</summary>
+<details><summary>All 40 plugins</summary>
 
 #### Messages
 
@@ -74,6 +74,7 @@ Turn plugins on and off in `Preferences` > `Taut`, where you can also write your
 - **Browser Pop-outs**: Enables Slack's pop-out windows in the browser
 - **Experiments**: Adds a tab for trying Slack's unreleased features
 - **Faster Slack**: Makes Slack faster and smoother
+- **No Slackbot Menubar**: Hides or quiets the Slackbot Mini icon in the menu bar
 - **Private Channel** (Hack Club only): Lets you see and mention private channels you aren't in (uses the [flaron](https://flaron.halceon.dev) index)
 - **Quick Join**: Adds "Join channel" to the right-click menu of channels you're not in
 - **Slack Fixes**: Fixes small bugs in Slack's UI
