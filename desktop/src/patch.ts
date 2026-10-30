@@ -9,6 +9,7 @@ import { redirectNativeModules } from './nativeModules.js'
 import { configDir } from './paths.js'
 import { getNativeFrame } from './prefs.js'
 import { checkForUpdates } from './updates.js'
+import { hookZoom, withTautZoom } from './zoom.js'
 
 declare const __TAUT_EMBEDDED__: boolean
 
@@ -156,6 +157,7 @@ function addAppMenuUpdateItems(menu: Electron.Menu) {
 
 function withTautMenu(menu: Electron.Menu) {
   addAppMenuUpdateItems(menu)
+  withTautZoom(menu)
   const idx = tautMenuIndex(menu)
   if (idx === -1) return menu
   const { items } = menu
@@ -178,6 +180,7 @@ export function applyPatches(slackAsarPath: string, tautPreloadPath: string) {
     slackAsars.push(realpathSync(slackAsarPath))
   } catch {}
   redirectNativeModules(slackResourcesPath)
+  hookZoom()
 
   let originalPreloadContents: string | null = null
   ipcMain.on('taut:get-original-preload', (event) => {
@@ -238,7 +241,10 @@ export function applyPatches(slackAsarPath: string, tautPreloadPath: string) {
     this: Electron.Menu,
     ...args: Parameters<Electron.Menu['popup']>
   ) {
-    if (isSlackAppMenu(this)) addAppMenuUpdateItems(this)
+    if (isSlackAppMenu(this)) {
+      addAppMenuUpdateItems(this)
+      withTautZoom(this)
+    }
     const idx = isSlackAppMenu(this) ? tautMenuIndex(this) : -1
     if (idx !== -1) this.insert(idx, new MenuItem(tautMenuTemplate))
     return origPopup.apply(this, args)

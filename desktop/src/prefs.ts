@@ -20,6 +20,7 @@ interface TautPrefs {
   notifPrompted?: boolean
   signing?: string
   nativeFrame?: boolean
+  zoom?: number
 }
 
 let cached: TautPrefs | null = null
@@ -55,4 +56,9 @@ export function getSigning(): string | undefined {
 
 export function getNativeFrame(): boolean {
   return cached?.nativeFrame ?? false
+}
+
+/** percentage */
+export function getZoom(): number | undefined {
+  return cached?.zoom
 }
