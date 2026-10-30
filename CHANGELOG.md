@@ -9,6 +9,11 @@ Each release is a `## x.y.z` heading, and each change is one bullet:
 - `- **Plugin Name**: Fixed what was broken` for a plugin fix
 - `- What changed` for a change to Taut itself
 
+## 3.7.0
+
+- **Admin Backend**: Adds Attend as an option
+- **Owl Mode**: Supports (demo) Owl in #owlery-demo, which is not anonymous
+
 ## 3.6.0
 
 - **Streamer Mode**: Blurs DM previews in Activity again, turns on when you share your screen in the desktop app, stays in sync across tabs, and can stay on all the time

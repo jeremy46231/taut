@@ -2,12 +2,16 @@
 
 import { opt, TautPlugin } from '$taut'
 
-const OWL_APP = 'A0C5L27PB9P'
+const OWL_APPS: Readonly<Record<string, string>> = {
+  A0C5L27PB9P: '',
+  A0CDBA8FXDL: 'demo',
+}
 /** how long to wait for owl's shortcuts to load and for its modal to open */
 const OWL_TIMEOUT = 10_000
 
 type Block = Record<string, any>
 type Owned = { key: string | null }
+type Owl = 'owl' | 'demo'
 type Thread = { channelId: string; threadTs: string }
 type Confirmation = { id: string; replyKey: string | null }
 type SendArgs = {
@@ -26,6 +30,23 @@ const FENCE = '```'
 const SLASH_COMMAND_RE = /^[/\uFF0F][^/\uFF0F\s]/
 const DRAFT_ID_RE = /^([A-Z0-9]+)-(\d+\.\d+)$/
 const REACTION_KEY_RE = /^message-(\d+\.\d+)-([A-Z0-9]+)$/
+
+function savedId(app: string, id: string): string {
+  return OWL_APPS[app] ? `${OWL_APPS[app]}-${id}` : id
+}
+function parseSaved(saved: string) {
+  const [, name = '', id = saved] = /^(?:([a-z]+)-)?(\d+)$/.exec(saved) ?? []
+  const app = Object.keys(OWL_APPS).find((app) => OWL_APPS[app] === name)
+  return { app, demo: !!name, label: `${name ? `${name} ` : ''}#${id}` }
+}
+/** which owl a saved id belongs to */
+function owlOf(saved: string): Owl {
+  return parseSaved(saved).demo ? 'demo' : 'owl'
+}
+/** the class that colors an element for `owl`, red for the demo */
+function themeClass(owl: Owl): string {
+  return owl === 'demo' ? ' taut-owl-demo' : ''
+}
 
 export default class OwlMode extends TautPlugin<typeof OwlMode> {
   static readonly id = 'OwlMode'
@@ -71,8 +92,8 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     'composers',
     []
   )
-  /** true inside a thread in owl mode, through to the popovers it opens */
-  private readonly InOwlThread = React.createContext(false)
+  /** which owl a thread in owl mode goes through, down to the popovers it opens */
+  private readonly InOwlThread = React.createContext<Owl | null>(null)
 
   async start() {
     await Promise.all([this.confessions.ready, this.mentionsWarned.ready])
@@ -84,6 +105,12 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       }
       body.sk-client-theme--dark {
         --taut-owl: 120, 150, 255;
+      }
+      .taut-owl-demo {
+        --taut-owl: 214, 48, 49;
+      }
+      body.sk-client-theme--dark .taut-owl-demo {
+        --taut-owl: 255, 107, 107;
       }
       .c-wysiwyg_container.taut-owl-composer {
         --TextyTheme-wysiwyg-border-color: rgba(var(--taut-owl), 0.6);
@@ -162,7 +189,11 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
         if (!thread) return null
         return {
           icon: thread.on ? 'glasses-filled' : 'glasses',
-          label: thread.on ? 'Reply as yourself' : 'Reply anonymously via Owl',
+          label: thread.on
+            ? 'Reply as yourself'
+            : parseSaved(thread.id).demo
+              ? 'Reply via (demo) Owl'
+              : 'Reply anonymously via Owl',
           pressed: thread.on,
           onClick: () =>
             thread.owned
@@ -203,7 +234,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       const thread = this.useThread(props.channelId, props.threadTs)
       if (!thread?.on) return <Original {...props} />
       return (
-        <this.InOwlThread.Provider value>
+        <this.InOwlThread.Provider value={owlOf(thread.id)}>
           <Original
             {...props}
             enableFileButton={false}
@@ -221,15 +252,17 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     // the message box itself, which edit boxes outside the owl composer also use
     this.api.patchComponent<{ className?: string }>(
       'WysiwygContainer',
-      (Original) => (props) =>
-        React.useContext(this.InOwlThread) ? (
+      (Original) => (props) => {
+        const owl = React.useContext(this.InOwlThread)
+        return owl ? (
           <Original
             {...props}
-            className={`${props.className ?? ''} taut-owl-composer`}
+            className={`${props.className ?? ''} taut-owl-composer${themeClass(owl)}`}
           />
         ) : (
           <Original {...props} />
         )
+      }
     )
 
     this.api.patchComponent<{
@@ -247,7 +280,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       if (!thread || !on) return <Original {...props} />
       return (
         <div
-          className="p-context_bar_v2 taut-owl-context-bar"
+          className={`p-context_bar_v2 taut-owl-context-bar${themeClass(owlOf(thread.id))}`}
           data-qa="context_bar"
           data-context-bar
         >
@@ -255,7 +288,11 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
             <this.api.elements.SvgIcon name="glasses-filled" />
           </div>
           <div className="p-context_bar_v2__content">
-            <span id={props.ariaId}>Replying anonymously via Owl</span>
+            <span id={props.ariaId}>
+              {parseSaved(thread.id).demo
+                ? 'Replying via (demo) Owl'
+                : 'Replying anonymously via Owl'}
+            </span>
           </div>
           <this.api.elements.Tooltip tip="Details" position="top" delay={500}>
             <this.api.elements.IconButtonBase
@@ -359,12 +396,12 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       const owl = this.useReactionOwl(props.reactionKey)
       if (!owl) return <Original {...props} />
       return (
-        <this.InOwlThread.Provider value>
+        <this.InOwlThread.Provider value={owl.owl}>
           <Original
             {...props}
-            className={`${props.className ?? ''} taut-owl-reactions`}
+            className={`${props.className ?? ''} taut-owl-reactions${themeClass(owl.owl)}`}
             // pills show as pressed where owl reacted
-            currentUser={owl}
+            currentUser={owl.user}
           />
         </this.InOwlThread.Provider>
       )
@@ -374,12 +411,12 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     this.api.patchComponent<{ ts?: string; channelId?: string }>(
       'MessageActions',
       (Original) => (props) => {
-        const owl = !!this.useReactionOwl(
+        const owl = this.useReactionOwl(
           `message-${props.ts}-${props.channelId}`
         )
         if (!owl) return <Original {...props} />
         return (
-          <this.InOwlThread.Provider value>
+          <this.InOwlThread.Provider value={owl.owl}>
             <Original {...props} />
           </this.InOwlThread.Provider>
         )
@@ -387,14 +424,16 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     )
     this.api.patchComponent(
       'MessageActionButtonReaction',
-      (Original) => (props) =>
-        React.useContext(this.InOwlThread) ? (
-          <span className="taut-owl-action">
+      (Original) => (props) => {
+        const owl = React.useContext(this.InOwlThread)
+        return owl ? (
+          <span className={`taut-owl-action${themeClass(owl)}`}>
             <Original {...props} />
           </span>
         ) : (
           <Original {...props} />
         )
+      }
     )
 
     this.api.patchComponent<{
@@ -402,26 +441,24 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       threadTs?: string
       channelId?: string
     }>('EmojiPickerPopover', (Original) => (props) => {
-      const on = !!this.useThread(props.channelId, props.threadTs ?? props.ts)
-        ?.on
-      if (!on) return <Original {...props} />
+      const thread = this.useThread(props.channelId, props.threadTs ?? props.ts)
+      if (!thread?.on) return <Original {...props} />
       return (
-        <this.InOwlThread.Provider value>
+        <this.InOwlThread.Provider value={owlOf(thread.id)}>
           <Original {...props} />
         </this.InOwlThread.Provider>
       )
     })
-    this.api.patchComponent(
-      'EmojiPicker',
-      (Original) => (props) =>
-        React.useContext(this.InOwlThread) ? (
-          <div className="taut-owl-picker">
-            <Original {...props} />
-          </div>
-        ) : (
+    this.api.patchComponent('EmojiPicker', (Original) => (props) => {
+      const owl = React.useContext(this.InOwlThread)
+      return owl ? (
+        <div className={`taut-owl-picker${themeClass(owl)}`}>
           <Original {...props} />
-        )
-    )
+        </div>
+      ) : (
+        <Original {...props} />
+      )
+    })
 
     this.api.composer.addSendCheck(async (blocks, { channelId, threadTs }) => {
       if (!threadTs || !this.isOn({ channelId, threadTs })) return true
@@ -446,9 +483,10 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     this.api.patchComponent<{ view?: { appId?: string; blocks?: unknown } }>(
       'ViewBlocks',
       (Original) => (props) => {
+        const app = props.view?.appId
         const shown =
-          props.view?.appId === OWL_APP
-            ? parseConfirmation(props.view.blocks)
+          app && Object.hasOwn(OWL_APPS, app)
+            ? parseConfirmation(props.view?.blocks, app)
             : undefined
         if (!shown) return <Original {...props} />
         return (
@@ -463,10 +501,10 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       'MessageBlocks',
       (Original) => (props) => {
         const { msg } = props
-        const shown =
-          msg?.channel?.startsWith('D') && this.isOwlMessage(msg)
-            ? parseConfirmation(msg.blocks)
-            : undefined
+        const app = msg?.channel?.startsWith('D')
+          ? this.owlAppOf(msg)
+          : undefined
+        const shown = app ? parseConfirmation(msg?.blocks, app) : undefined
         if (!shown) return <Original {...props} />
         return (
           <>
@@ -493,7 +531,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
             <Button
               type="outline"
               size="small"
-              className="p-block_kit_button_element taut-owl-save__button"
+              className={`p-block_kit_button_element taut-owl-save__button${themeClass(owlOf(id))}`}
               disabled={saved}
               onClick={() => this.save(id, replyKey)}
             >
@@ -522,17 +560,20 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     return this.api.members.getCurrentMemberId() ?? ''
   }
 
-  private isOwlMessage(msg: Record<string, any> | undefined): boolean {
-    if (!msg?.bot_id) return false
-    if (msg.bot_profile?.app_id === OWL_APP) return true
-    return this.api.redux.getRawState()?.bots?.[msg.bot_id]?.app_id === OWL_APP
+  private owlAppOf(msg: Record<string, any> | undefined): string | undefined {
+    if (!msg?.bot_id) return
+    return [
+      msg.bot_profile?.app_id,
+      this.api.redux.getRawState()?.bots?.[msg.bot_id]?.app_id,
+    ].find((app) => typeof app === 'string' && Object.hasOwn(OWL_APPS, app))
   }
 
-  /** the confession id of an owl post */
+  /** the saved id of an owl post */
   private confessionOf({ channelId, threadTs }: Thread): string | undefined {
     const root = this.api.messages.getRawMessage(channelId, threadTs)
-    if (!root || !this.isOwlMessage(root)) return
-    return /^(\d+): /.exec(String(root.text ?? ''))?.[1]
+    const app = this.owlAppOf(root)
+    const id = app && /^(\d+): /.exec(String(root?.text ?? ''))?.[1]
+    return id ? savedId(app, id) : undefined
   }
 
   private ownedRecord(id: string): Owned | undefined {
@@ -577,20 +618,29 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       : undefined
   }
 
-  /** owl's member id where a reaction bar is in owl mode */
-  private useReactionOwl(reactionKey: string | undefined): string | undefined {
+  /** owl's member id where a reaction bar is in owl mode, and which owl it is */
+  private useReactionOwl(
+    reactionKey: string | undefined
+  ): { user: string; owl: Owl } | undefined {
     // rerenders when owl mode turns on or off
     this.confessions.use()
     this.modes.use()
-    return this.api.redux.useReduxState(() => {
+    const root = () => {
       const target = this.reactionTarget(reactionKey)
-      if (!target) return undefined
-      const root = this.api.messages.getRawMessage(
-        target.channelId,
-        target.threadTs
+      return (
+        target &&
+        this.api.messages.getRawMessage(target.channelId, target.threadTs)
       )
-      return typeof root?.user === 'string' ? root.user : undefined
+    }
+    // separate selectors, an object would never compare equal
+    const user = this.api.redux.useReduxState(() => {
+      const owl = root()?.user
+      return typeof owl === 'string' ? owl : undefined
     })
+    const demo = this.api.redux.useReduxState(
+      () => !!OWL_APPS[this.owlAppOf(root()) ?? '']
+    )
+    return user ? { user, owl: demo ? 'demo' : 'owl' } : undefined
   }
 
   private setMode({ channelId, threadTs }: Thread, on: boolean) {
@@ -621,7 +671,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     const { Label } = this.api.modal
     const { MrkdwnElement } = this.api.elements
     this.api.modal.openModal({
-      title: `Owl #${id}`,
+      title: `Owl ${parseSaved(id).label}`,
       body: replyKey ? (
         <>
           <Label text="Private reply key" />
@@ -639,7 +689,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
 
   private async confirmForget(id: string) {
     const forget = await this.api.modal.confirm({
-      title: `Forget #${id}?`,
+      title: `Forget ${parseSaved(id).label}?`,
       body: this.ownedRecord(id)?.key
         ? "Copy the reply key first if it isn't saved anywhere else. Owl can't show it again."
         : 'You can save it again from the owl button.',
@@ -696,7 +746,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       )
     }
     this.api.modal.openModal({
-      title: `Reply as the author of #${id}`,
+      title: `Reply as the author of ${parseSaved(id).label}`,
       submitText: 'Save in Taut',
       body: <KeyField />,
       onSubmit: async () => {
@@ -725,10 +775,16 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     const blocks = await this.api.blocks.fromDraft(args.delta?.ops ?? [])
     const richText = blocks.find((block) => block.type === 'rich_text')
     if (!richText) throw new Error('Nothing to send')
-    await this.runOwl('Reply anonymously', thread.channelId, thread.threadTs, {
-      key: { key: { type: 'plain_text_input', value: record.key ?? '' } },
-      text: { text: { type: 'rich_text_input', rich_text_value: richText } },
-    })
+    await this.runOwl(
+      id,
+      'Reply anonymously',
+      thread.channelId,
+      thread.threadTs,
+      {
+        key: { key: { type: 'plain_text_input', value: record.key ?? '' } },
+        text: { text: { type: 'rich_text_input', rich_text_value: richText } },
+      }
+    )
   }
 
   private async reactAsOwl(target: Thread & { ts: string }, name: string) {
@@ -737,7 +793,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     if (!record) throw new Error('[Taut] Not your confession')
     // owl takes the base emoji name
     const emoji = name.split('::')[0]
-    await this.runOwl('React anonymously', target.channelId, target.ts, {
+    await this.runOwl(id, 'React anonymously', target.channelId, target.ts, {
       key: { key: { type: 'plain_text_input', value: record.key ?? '' } },
       emoji: {
         emoji: {
@@ -751,8 +807,8 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     })
   }
 
-  /** the id of owl's message shortcut named `name` */
-  private async owlShortcut(name: string): Promise<string> {
+  /** the id of `app`'s message shortcut named `name` */
+  private async owlShortcut(app: string, name: string): Promise<string> {
     // slack loads the shortcuts list shortly after boot
     const id = await this.api.within(
       (signal) =>
@@ -761,8 +817,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
             Object.values<{ appId?: string; id?: string; name?: string }>(
               this.api.redux.getRawState()?.appActions?.actions ?? {}
             ).find(
-              (action) =>
-                action.appId === OWL_APP && action.name?.endsWith(name)
+              (action) => action.appId === app && action.name?.endsWith(name)
             )?.id,
           signal
         ),
@@ -773,14 +828,17 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     return id
   }
 
-  /** run an owl shortcut on a message and submit its modal */
+  /** run the shortcut of the owl that posted confession `id` on a message and submit its modal */
   private async runOwl(
+    id: string,
     shortcut: string,
     channelId: string,
     messageTs: string,
     values: Record<string, unknown>
   ) {
-    const actionId = await this.owlShortcut(shortcut)
+    const { app } = parseSaved(id)
+    if (!app) throw new Error("Taut doesn't know that Owl app")
+    const actionId = await this.owlShortcut(app, shortcut)
     // slack's format, it parses the timestamp
     this.lastToken = Math.max(Date.now(), this.lastToken + 1)
     const clientToken = `web-${this.lastToken}`
@@ -801,7 +859,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     this.log('running owl shortcut', actionId, 'on', messageTs)
     try {
       await this.dispatch('executeAppAction', {
-        appId: OWL_APP,
+        appId: app,
         actionId,
         channelId,
         messageTs,
@@ -851,14 +909,18 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
 }
 
 /** owl's confirmation, in its modal or its DM, as shown when you submit */
-function parseConfirmation(blocks: unknown): Confirmation | undefined {
+function parseConfirmation(
+  blocks: unknown,
+  app: string
+): Confirmation | undefined {
   if (!Array.isArray(blocks)) return
   const text = blocks
     .map((block: Block) => block?.text?.text)
     .filter((t) => typeof t === 'string')
     .join('\n')
-  const id = /(?:Post|Confession) #(\d+)/.exec(text)?.[1]
-  if (!id) return
+  const number = /(?:Post|Confession) #(\d+)/.exec(text)?.[1]
+  if (!number) return
+  const id = savedId(app, number)
   const key = /Your private reply key:\n([0-9a-f]{64})/.exec(text)?.[1]
   if (key) return { id, replyKey: key }
   if (text.includes('recognized through its salted hash')) {
