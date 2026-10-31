@@ -1073,64 +1073,98 @@ export class PluginManager {
     id: string,
     url: string | undefined
   ): Promise<void> {
+    let saved = false
     try {
-      if (url) await this.urlSources().write(id, url)
-      else await this.urlSources().delete(id)
+      saved = url
+        ? await this.urlSources().write(id, url)
+        : await this.urlSources().delete(id)
     } catch (err) {
       console.error(`[Taut] Failed to save the source URL for ${id}:`, err)
+      return
     }
+    if (!saved) console.error(`[Taut] Failed to save the source URL for ${id}`)
   }
 
   /** Checks URL-imported plugins now, then every few hours. */
   startUrlPluginUpdates(): void {
     // safe mode exists to run no plugin code, so it doesn't fetch new code either
     if (this.safeMode || this.urlCheckTimer !== undefined) return
-    void this.checkUrlPlugins()
+    this.runUrlCheck()
     this.urlCheckTimer = setInterval(
-      () => void this.checkUrlPlugins(),
+      () => this.runUrlCheck(),
       PluginManager.URL_CHECK_MS
     )
   }
 
-  /** Re-fetches each URL-imported plugin; a changed file replaces its code. Failures keep the current code. */
+  private runUrlCheck(): void {
+    this.checkUrlPlugins().catch((err) =>
+      console.error('[Taut] Plugin update check failed:', err)
+    )
+  }
+
+  private urlCheckRunning = false
+
+  /**
+   * Re-fetches each URL-imported plugin; a changed file replaces its code.
+   * Only https URLs are checked. Failures keep the current code, and a check
+   * never overrides a manual edit or a delete made while it was fetching.
+   */
   async checkUrlPlugins(): Promise<void> {
-    let ids: string[]
+    if (this.urlCheckRunning) return
+    this.urlCheckRunning = true
     try {
-      ids = await this.urlSources().list()
-    } catch (err) {
-      console.error('[Taut] Failed to list plugin source URLs:', err)
-      return
-    }
-    for (const id of ids) {
-      const current = this.plugins.get(id)
-      const url = await this.urlSources()
-        .read(id)
-        .catch(() => null)
-      if (!url || current?.source !== 'user') continue
+      let ids: string[]
       try {
-        const res = await this.bridge.fetch(url)
-        if (!res.ok) {
-          console.error(
-            `[Taut] Update check for ${id} failed (HTTP ${res.status})`
-          )
-          continue
-        }
-        const code = await res.text()
-        if (code === current.code) continue
-        const result = await this.installUserPlugin(code, id, url)
-        if (result.ok) console.log(`[Taut] Updated plugin ${id} from ${url}`)
-        else
-          console.error(`[Taut] Update for ${id} was refused: ${result.error}`)
+        ids = await this.urlSources().list()
       } catch (err) {
-        console.error(`[Taut] Update check for ${id} failed:`, err)
+        console.error('[Taut] Failed to list plugin source URLs:', err)
+        return
       }
+      for (const id of ids) {
+        const url = await this.urlSources()
+          .read(id)
+          .catch(() => null)
+        const current = this.plugins.get(id)
+        if (!url?.startsWith('https://') || current?.source !== 'user') continue
+        try {
+          const res = await this.bridge.fetch(url)
+          if (!res.ok) {
+            console.error(
+              `[Taut] Update check for ${id} failed (HTTP ${res.status})`
+            )
+            continue
+          }
+          const code = await res.text()
+          if (code === current.code) continue
+          const result = await this.installUserPlugin(
+            code,
+            id,
+            url,
+            current.code
+          )
+          if (result.ok) console.log(`[Taut] Updated plugin ${id} from ${url}`)
+          else
+            console.error(
+              `[Taut] Update for ${id} was refused: ${result.error}`
+            )
+        } catch (err) {
+          console.error(`[Taut] Update check for ${id} failed:`, err)
+        }
+      }
+    } finally {
+      this.urlCheckRunning = false
     }
   }
 
+  /**
+   * `expectedCode`, when given, is the code the caller last saw: the install is
+   * refused if the plugin has changed or been deleted since then.
+   */
   async installUserPlugin(
     code: string,
     replacingId?: string,
-    sourceUrl?: string
+    sourceUrl?: string,
+    expectedCode?: string
   ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
     const store = this.bridge.userPlugins
     let id: string
@@ -1153,6 +1187,9 @@ export class PluginManager {
 
     return this.runExclusive(id, async () => {
       const existing = this.plugins.get(id)
+      if (expectedCode !== undefined && existing?.code !== expectedCode) {
+        return { ok: false, error: 'the plugin changed while it was updating' }
+      }
       if (existing && (existing.source === 'bundled' || id !== replacingId)) {
         return {
           ok: false,
