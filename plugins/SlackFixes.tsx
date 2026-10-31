@@ -1,6 +1,6 @@
 // Fixes small bugs in Slack's UI
 
-import { TautPlugin } from '$taut'
+import { opt, TautPlugin } from '$taut'
 
 export default class SlackFixes extends TautPlugin<typeof SlackFixes> {
   static readonly id = 'SlackFixes'
@@ -10,20 +10,39 @@ export default class SlackFixes extends TautPlugin<typeof SlackFixes> {
   static readonly category = 'app'
   static readonly defaultConfig = {
     enabled: true,
+    zalgoText: opt(true, 'Keeps zalgo text from covering the screen'),
+    botThreadAdminTools: opt(
+      true,
+      'Shows thread admin tools on threads started by bots'
+    ),
+    halloweenSidebarRow: opt(
+      true,
+      'Lines up the icon and fixes the corners of the Halloween sidebar row'
+    ),
   }
 
   start(): void {
-    /* halloween sidebar row */
-    this.api.setStyle(`
-      [data-qa="spooky_sidebar_candy_icon"] {
-        width: 16px;
-        padding-right: 0;
-        justify-content: center;
-      }
-      [class*="spookySidebarLinkContainer__"] { border-radius: 6px; }
-    `)
+    if (this.config.halloweenSidebarRow) {
+      this.api.setStyle(`
+        [data-qa="spooky_sidebar_candy_icon"] {
+          width: 16px;
+          padding-right: 0;
+          justify-content: center;
+        }
+        [class*="spookySidebarLinkContainer__"] { border-radius: 6px; }
+      `)
+    }
 
-    this.patchThreadModeration()
+    if (this.config.zalgoText) {
+      this.api.setStyle(`
+        .p-rich_text_block, .p-section_block__text {
+          overflow: clip;
+          overflow-clip-margin: 4px;
+        }
+      `)
+    }
+
+    if (this.config.botThreadAdminTools) this.patchThreadModeration()
     this.log('Started')
   }
 

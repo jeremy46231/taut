@@ -41,6 +41,13 @@ export const updateStatus = new Store<UpdateStatus>(null)
 export const noticeItems = (status: UpdateStatus): UpdateItem[] =>
   status?.items.filter((item) => item.notify) ?? []
 
+const OFFICIAL_URLS = [
+  'https://taut.jer.app/taut.js',
+  'https://taut.jer.app/taut.debug.js',
+]
+/** has to be run sync as taut.js runs for currentScript to be set */
+const loadedFrom = (document.currentScript as HTMLScriptElement | null)?.src
+
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
 const FETCH_INTERVAL = 6 * HOUR
@@ -49,6 +56,7 @@ const SELF_UPDATE_GRACE = 3 * DAY
 
 export interface StatusInput {
   app: string
+  customHost: string | null
   loader: LoaderName
   loaderVersion: string
   install: TautInstall | null
@@ -121,7 +129,10 @@ export function computeStatus(input: StatusInput): UpdateStatus {
       current: input.app,
       latest: app,
       notify: true,
-      action: { label: 'Reload', run: input.reload },
+      // reloading only updates the official builds
+      action: input.customHost
+        ? { label: `Loading from ${input.customHost}` }
+        : { label: 'Reload', run: input.reload },
     })
   }
 
@@ -231,6 +242,10 @@ export function startUpdateCheck(bridge: NormalizedBridge) {
     if (!versions) return
     const input: StatusInput = {
       app: tautVersion,
+      customHost:
+        loadedFrom && !OFFICIAL_URLS.includes(loadedFrom)
+          ? new URL(loadedFrom).host
+          : null,
       loader: bridge.loader,
       loaderVersion: bridge.loaderVersion,
       install,

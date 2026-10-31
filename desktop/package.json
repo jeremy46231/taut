@@ -1,7 +1,7 @@
 {
   "name": "taut-desktop",
-  "version": "3.4.0",
-  "slackVersion": "4.52.182",
+  "version": "3.4.1",
+  "slackVersion": "4.53.276",
   "description": "Client mod for Slack",
   "homepage": "https://taut.jer.app",
   "license": "GPL-3.0-or-later",

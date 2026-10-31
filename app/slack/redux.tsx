@@ -1,3 +1,5 @@
+import { within } from '../helpers'
+import { Store } from '../store'
 import { getFiberFromNode, reactPromise } from './react'
 import {
   byMeta,
@@ -93,17 +95,32 @@ patchFunctionExport(
       try {
         wrapGetState(store)
         wrapSubscribe(store)
-        if (!cachedStore) lookingForStore.add(store.subscribe(getReduxStore))
+        if (!currentStore.get())
+          lookingForStore.add(store.subscribe(getReduxStore))
       } catch {}
       return store
     }
 )
 
-let cachedStore: SlackStore | null = null
+/** the store of the workspace on screen, which changes when Slack switches workspaces in place */
+const currentStore = new Store<SlackStore | null>(null)
+let teamContexts: any[] | undefined
 
-/** Slack's react-redux store, found via the <Provider> value on the fiber tree (cached) */
+function setCurrentStore(store: SlackStore) {
+  if (store === currentStore.get()) return
+  if (!currentStore.get()) {
+    resolveStore(store)
+    for (const unsubscribe of lookingForStore) unsubscribe()
+    lookingForStore.clear()
+  }
+  teamContexts = undefined
+  currentStore.set(store)
+}
+
+/** Slack's react-redux store for the workspace on screen, found via the <Provider> value until Slack's client store has it */
 export function getReduxStore(): SlackStore | null {
-  if (cachedStore) return cachedStore
+  const current = currentStore.get()
+  if (current) return current
   const start = document.querySelector('.p-client_container')?.firstElementChild
   if (!start) return null
   for (let fiber = getFiberFromNode(start); fiber; fiber = fiber.return) {
@@ -114,10 +131,7 @@ export function getReduxStore(): SlackStore | null {
       typeof store.getState === 'function' &&
       typeof store.subscribe === 'function'
     ) {
-      cachedStore = store
-      resolveStore(store)
-      for (const unsubscribe of lookingForStore) unsubscribe()
-      lookingForStore.clear()
+      setCurrentStore(store)
       return store
     }
   }
@@ -129,15 +143,24 @@ export function waitForStore(): Promise<SlackStore> {
   return Promise.resolve(getReduxStore() ?? storePromise)
 }
 
-/** `store.subscribe` starting once the store exists, returns a disposer */
+/** `store.subscribe` on the current store, moved and called again when the workspace changes, returns a disposer */
 export function subscribeStore(listener: () => void): () => void {
+  let store: SlackStore | null = null
   let unsubscribe: (() => void) | undefined
-  let disposed = false
-  waitForStore().then((store) => {
-    if (!disposed) unsubscribe = store.subscribe(listener)
-  })
+  const follow = () => {
+    const next = getReduxStore()
+    if (next === store) return
+    const switched = store !== null
+    unsubscribe?.()
+    store = next
+    unsubscribe = next?.subscribe(listener)
+    // what the listener reads changed with the store
+    if (switched) listener()
+  }
+  const stopFollowing = currentStore.subscribe(follow)
+  follow()
   return () => {
-    disposed = true
+    stopFollowing()
     unsubscribe?.()
   }
 }
@@ -179,7 +202,26 @@ export function waitForClientStore(): Promise<SlackStore> {
   return clientStorePromise
 }
 
-let teamContexts: any[] | undefined
+// the client store names the workspace on screen, and slack keeps a store per booted workspace
+const followingWorkspace = Promise.all([
+  clientStorePromise,
+  waitForExport<(state: any) => string | undefined>(
+    byName('getFocusedWorkspace')
+  ),
+  waitForExport<(id: string) => SlackStore | undefined>(
+    byName('getStoreInstanceByTeamId')
+  ),
+]).then(([client, getFocusedWorkspace, getStoreInstanceByTeamId]) => {
+  const follow = () => {
+    const id = getFocusedWorkspace(client.getState())
+    const store = id ? getStoreInstanceByTeamId(id) : undefined
+    if (store) setCurrentStore(store)
+  }
+  client.subscribe(follow)
+  follow()
+})
+// without it, an in-place workspace switch leaves Taut on the first workspace
+within(followingWorkspace, 30_000, "Slack's per-workspace stores")
 
 /** the react contexts providing the rendered store, Slack provides the same state under more than one */
 function teamStoreContexts(): any[] {
@@ -611,18 +653,13 @@ export const reduxPromise = (async () => {
 
   /** reactively select from the store inside a React render */
   function useReduxState<T>(selector: (state: any) => T): T | undefined {
-    const store = getReduxStore()
     const selectorRef = React.useRef(selector)
     selectorRef.current = selector
-    const subscribe = React.useCallback(
-      (cb: () => void) => (store ? store.subscribe(cb) : () => {}),
-      [store]
-    )
-    const getSnapshot = React.useCallback(
-      () => (store ? selectorRef.current(store.getState()) : undefined),
-      [store]
-    )
-    return React.useSyncExternalStore(subscribe, getSnapshot)
+    const getSnapshot = React.useCallback(() => {
+      const store = getReduxStore()
+      return store ? selectorRef.current(store.getState()) : undefined
+    }, [])
+    return React.useSyncExternalStore(subscribeStore, getSnapshot)
   }
 
   // rerenders on every refresh, for render code that reads patched data outside a store subscription

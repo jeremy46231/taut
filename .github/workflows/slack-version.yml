@@ -35,23 +35,23 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: |
           curl -fsSL "https://downloads.slack-edge.com/desktop-releases/linux/x64/$LATEST/slack-desktop-$LATEST-amd64.deb" -o slack.deb
-          ar p slack.deb data.tar.xz | tar -xJ --strip-components=5 ./usr/lib/slack/resources/app.asar
-          npx --yes @electron/asar extract-file app.asar package.json
-          echo "slack=$(jq -r .devDependencies.electron package.json)" >> "$GITHUB_OUTPUT"
+          ar p slack.deb data.tar.xz | tar -xJ --strip-components=4 ./usr/lib/slack/version ./usr/lib/slack/resources/app.asar
+          mv resources/app.asar app.asar
+          grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' version || { echo "::error::no Electron version in Slack $LATEST's usr/lib/slack/version"; exit 1; }
+          echo "slack=$(cat version)" >> "$GITHUB_OUTPUT"
           echo "taut=$(jq -r .devDependencies.electron "$GITHUB_WORKSPACE/package.json")" >> "$GITHUB_OUTPUT"
-          rm package.json
           # the arm64 linux build rebuilds these from public packages, flag drift
           NOTE=""
           for spec in $(node -e '
             import(process.argv[1]).then(({ SLACK_NATIVE_MODULES }) => {
               for (const m of SLACK_NATIVE_MODULES) console.log(`${m.slackPackage ?? m.package}=${m.slackVersion ?? m.version}`)
             })' "$GITHUB_WORKSPACE/scripts/lib/natives.ts"); do
-            npx @electron/asar extract-file app.asar "node_modules/${spec%%=*}/package.json"
+            npx --yes @electron/asar extract-file app.asar "node_modules/${spec%%=*}/package.json"
             THEIRS=$(jq -r .version package.json); rm package.json
             [ "$THEIRS" = "${spec#*=}" ] || NOTE="$NOTE ${spec%%=*} is $THEIRS in Slack, scripts/lib/natives.ts was checked against ${spec#*=}."
           done
           echo "natives=$NOTE" >> "$GITHUB_OUTPUT"
-          rm slack.deb app.asar
+          rm -r slack.deb app.asar version resources
 
       - if: steps.versions.outputs.latest != steps.versions.outputs.current
         env:

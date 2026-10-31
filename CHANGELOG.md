@@ -9,6 +9,11 @@ Each release is a `## x.y.z` heading, and each change is one bullet:
 - `- **Plugin Name**: Fixed what was broken` for a plugin fix
 - `- What changed` for a change to Taut itself
 
+## 3.7.1
+
+- Fixed plugins having the wrong data after switching workspaces on desktop
+- **Slack Fixes**: Keeps zalgo text from covering the screen
+
 ## 3.7.0
 
 - **Admin Backend**: Adds Attend as an option

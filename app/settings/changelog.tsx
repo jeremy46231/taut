@@ -71,6 +71,9 @@ export const CHANGELOG_CSS = `
     min-width: 0;
     color: var(--dt_color-content-sec);
   }
+  .taut-updates__note {
+    color: var(--dt_color-content-ter);
+  }
   .taut-updates__item > :last-child {
     flex: none;
   }
@@ -253,7 +256,7 @@ export function UpdateList({
             >
               {action.label}
             </elements.Button>
-          ) : (
+          ) : action.href ? (
             <a
               className="c-link"
               href={action.href}
@@ -263,6 +266,8 @@ export function UpdateList({
             >
               {action.label}
             </a>
+          ) : (
+            <span className="taut-updates__note">{action.label}</span>
           )}
         </li>
       ))}
