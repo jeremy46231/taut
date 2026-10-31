@@ -515,12 +515,16 @@ export function ImportControls({
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
-  const run = async (getCode: () => Promise<string>) => {
+  const run = async (getCode: () => Promise<string>, sourceUrl?: string) => {
     setBusy(true)
     setError(null)
     try {
       const code = await getCode()
-      const result = await pluginManager.installUserPlugin(code, replacingId)
+      const result = await pluginManager.installUserPlugin(
+        code,
+        replacingId,
+        sourceUrl
+      )
       if (!result.ok) {
         setError(result.error)
         return
@@ -552,7 +556,7 @@ export function ImportControls({
       const res = await pluginManager.bridge.fetch(urlString)
       if (!res.ok) throw new Error(`Failed to fetch (HTTP ${res.status})`)
       return res.text()
-    })
+    }, urlString)
   }
 
   return (
