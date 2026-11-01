@@ -2,6 +2,20 @@
 
 // parallel to extension/chrome/content.js
 
+// if a service worker is running, drop it and reload (so the patch actually runs)
+navigator.serviceWorker
+  .getRegistrations()
+  .then((registrations) =>
+    Promise.all(registrations.map((r) => r.unregister()))
+  )
+  .then((unregistered) => {
+    if (unregistered.includes(true) && navigator.serviceWorker.controller)
+      location.reload()
+  })
+  .catch((e) =>
+    console.warn("[Taut] Couldn't remove Slack's service worker:", e)
+  )
+
 window.addEventListener('message', async (event) => {
   if (event.source !== window) return
   const msg = event.data

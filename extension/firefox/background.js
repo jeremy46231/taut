@@ -87,6 +87,13 @@ import { serializeResponse } from '../shared/fetchBody.js'
     ['blocking']
   )
 
+  // disable the service worker so the patch above works
+  browser.webRequest.onBeforeRequest.addListener(
+    () => ({ cancel: true }),
+    { urls: ['https://app.slack.com/service-worker.js*'] },
+    ['blocking']
+  )
+
   /** @param {string} namespace */
   const blobPrefix = (namespace) =>
     `taut:blob:${encodeURIComponent(namespace)}:`
