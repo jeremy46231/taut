@@ -53,6 +53,7 @@ export default class LetMeSee extends TautPlugin<typeof LetMeSee> {
   private strikeColor = '#E01E5A'
   private hintRoot: HTMLElement | undefined
   private unsubscribeDrawings: (() => void) | undefined
+  private guard: MutationObserver | undefined
 
   async start() {
     const Anchor = this.makeAnchor()
@@ -147,18 +148,31 @@ export default class LetMeSee extends TautPlugin<typeof LetMeSee> {
     this.iconSize = measured >= 8 ? Math.round(measured) : 20
     wrapper.append(button)
 
-    const anchor =
-      stop.parentElement && stop.parentElement.parentElement === root
-        ? stop.parentElement
-        : stop
-    anchor.before(wrapper)
     this.wrapper = wrapper
     this.button = button
+    this.placeWrapper(root)
+    this.guard?.disconnect()
+    // Draw toggling re-renders the bar and can move our wrapper, so put it back when that happens
+    this.guard = new MutationObserver(() => this.placeWrapper(root))
+    this.guard.observe(root, { childList: true })
     this.paint()
+  }
+
+  /** between Draw and Stop Sharing: directly before Stop Sharing's top-level child of the bar */
+  private placeWrapper(root: HTMLElement) {
+    const wrapper = this.wrapper
+    const stop = root.querySelector<HTMLElement>(`.${STOP_CLASS}`)
+    if (!wrapper || !stop) return
+    let top: HTMLElement = stop
+    while (top.parentElement && top.parentElement !== root) top = top.parentElement
+    if (wrapper.parentElement === root && wrapper.nextElementSibling === top) return
+    top.before(wrapper)
   }
 
   private unmountButton() {
     this.showHint(false)
+    this.guard?.disconnect()
+    this.guard = undefined
     this.wrapper?.remove()
     this.wrapper = undefined
     this.button = undefined
