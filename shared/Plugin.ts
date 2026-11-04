@@ -22,6 +22,7 @@ export type { MenuProps } from '../app/api/menu'
 export type { ModalHandle, OpenModalOptions } from '../app/api/modal'
 export type { StoredStore } from '../app/api/pluginStorage'
 export type { SharedStore, SharedStoreHandle } from '../app/api/sharedStore'
+export type { TrayAPI, TrayEvent, TrayState } from '../app/api/tray'
 export type { UserAPIOptions } from '../app/api/userAPI'
 export type { TautAPI } from '../app/pluginManager'
 export type {

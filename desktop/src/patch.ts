@@ -8,6 +8,7 @@ import { app, BrowserWindow, ipcMain, Menu, MenuItem, shell } from 'electron'
 import { redirectNativeModules } from './nativeModules.js'
 import { configDir } from './paths.js'
 import { getNativeFrame } from './prefs.js'
+import { setupTray, wrapTray } from './tray.js'
 import { checkForUpdates } from './updates.js'
 import { hookZoom, withTautZoom } from './zoom.js'
 
@@ -186,6 +187,9 @@ export function applyPatches(slackAsarPath: string, tautPreloadPath: string) {
   ipcMain.on('taut:get-original-preload', (event) => {
     event.returnValue = originalPreloadContents
   })
+
+  overrides.Tray = wrapTray(electronCjs.Tray)
+  setupTray()
 
   const OrigBrowserWindow = electronCjs.BrowserWindow
   overrides.BrowserWindow = new Proxy(OrigBrowserWindow, {

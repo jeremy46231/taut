@@ -28,6 +28,7 @@ import { preferences } from './api/preferences'
 import { RateLimit } from './api/rateLimit'
 import { deferResizeWork } from './api/resize'
 import { bindSharedStore, SharedStore, sharedFrom } from './api/sharedStore'
+import { trayAPI } from './api/tray'
 import { userAPI } from './api/userAPI'
 import type { NormalizedBridge } from './bridgeCompat'
 import type { ConfigStore } from './configStore'
@@ -159,6 +160,7 @@ async function makeBaseTautAPI(bridge: NormalizedBridge) {
     menu: await menuAPIPromise,
     elements: await elementsAPIPromise,
     preferences,
+    tray: trayAPI(bridge),
     commonModules: {
       react: await reactPromise,
     },
@@ -282,6 +284,25 @@ function joinBlobStores(parts: Record<string, BlobStore>): BlobStore {
   }
 }
 
+/** the icon is shown again and its clicks go back to Slack when the plugin stops */
+function scopedTray(tray: BaseTautAPI['tray'], scope: PluginScope) {
+  return {
+    ...tray,
+    setHidden: (hidden: boolean) => {
+      if (scope.signal.aborted) return
+      if (hidden) scope.track(() => tray.setHidden(false))
+      tray.setHidden(hidden)
+    },
+    intercept: (events: Parameters<typeof tray.intercept>[0]) => {
+      if (scope.signal.aborted) return
+      if (events.length) scope.track(() => tray.intercept([]))
+      tray.intercept(events)
+    },
+    onEvent: (cb: Parameters<typeof tray.onEvent>[0]) =>
+      scope.track(tray.onEvent(cb)),
+  }
+}
+
 /** a plugin's `this.api`, registrations undone when it stops and storage scoped to its id */
 function createScopedAPI(
   base: BaseTautAPI,
@@ -370,6 +391,7 @@ function createScopedAPI(
       ...base.preferences,
       addTab: tracked(base.preferences.addTab),
     },
+    tray: scopedTray(base.tray, scope),
     sharedFrom: <T>(pluginId: string, key: string) => {
       const handle = base.sharedFrom<T>(pluginId, key)
       return { ...handle, subscribe: tracked(handle.subscribe) }

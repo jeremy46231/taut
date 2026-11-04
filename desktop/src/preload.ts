@@ -1,6 +1,10 @@
 // Taut Desktop Preload
 
-import type { TautBridge, TautInstall } from '../../shared/TautBridge'
+import type {
+  TautBridge,
+  TautInstall,
+  TautTrayEvent,
+} from '../../shared/TautBridge'
 import type { RpcArgs, RpcMethod, RpcResult, SerialFetchInit } from './rpc'
 
 declare const __TAUT_LOADER_VERSION__: string
@@ -199,6 +203,19 @@ function reloadWithoutTaut(error: unknown) {
         ipcRenderer.on('taut:user-plugin-changed', handler)
         return () =>
           ipcRenderer.removeListener('taut:user-plugin-changed', handler)
+      },
+    },
+
+    tray: {
+      state: () => ipcRenderer.invoke('taut:tray-state'),
+      setHidden: (hidden: boolean) =>
+        ipcRenderer.send('taut:tray-hidden', hidden),
+      intercept: (events: TautTrayEvent[]) =>
+        ipcRenderer.send('taut:tray-intercept', events),
+      onEvent(cb: (event: TautTrayEvent) => void) {
+        const handler = (_: unknown, event: TautTrayEvent) => cb(event)
+        ipcRenderer.on('taut:tray-event', handler)
+        return () => ipcRenderer.removeListener('taut:tray-event', handler)
       },
     },
 
