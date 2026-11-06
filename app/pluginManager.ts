@@ -339,6 +339,7 @@ function createScopedAPI(
     patchComponent: tracked(base.patchComponent) as typeof base.patchComponent,
     redux: {
       ...base.redux,
+      subscribe: tracked(base.redux.subscribe),
       patchState: tracked(base.redux.patchState),
       patchSlice: tracked(base.redux.patchSlice),
       patchThunk: tracked(base.redux.patchThunk),
