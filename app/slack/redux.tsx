@@ -720,6 +720,7 @@ export const reduxPromise = (async () => {
 
   return {
     getStore: getReduxStore,
+    subscribe: subscribeStore,
     waitForStore,
     getRawState,
     waitForState,

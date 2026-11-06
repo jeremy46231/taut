@@ -187,7 +187,10 @@ export type PluginDataFlags = { hasStorage: boolean; hasCache: boolean }
 type PluginScope = {
   signal: AbortSignal
   abort(): void
+  /** runs `cleanup` when the plugin stops, or when the returned disposer is called */
   track(cleanup: () => void): () => void
+  /** drops a disposer from `track` without running its cleanup, for when it's done early */
+  release(disposer: () => void): void
   wrap(blob: BlobStore): BlobStore
   dispose(): Promise<void>
 }
@@ -197,15 +200,16 @@ function createPluginScope(): PluginScope {
   let mutationTail: Promise<void> = Promise.resolve()
   const controller = new AbortController()
   const pending = new Set<Promise<unknown>>()
-  const cleanups: Array<() => void> = []
+  const cleanups = new Set<() => void>()
   const track = (cleanup: () => void) => {
     let cleaned = false
     const wrapped = () => {
       if (cleaned) return
       cleaned = true
+      cleanups.delete(wrapped)
       cleanup()
     }
-    if (active) cleanups.push(wrapped)
+    if (active) cleanups.add(wrapped)
     else wrapped()
     return wrapped
   }
@@ -224,6 +228,9 @@ function createPluginScope(): PluginScope {
     signal: controller.signal,
     abort: () => controller.abort(),
     track,
+    release: (disposer) => {
+      cleanups.delete(disposer)
+    },
     wrap: (blob) => ({
       list: () => blob.list(),
       read: (key) => blob.read(key),
@@ -235,9 +242,10 @@ function createPluginScope(): PluginScope {
       if (!active) return
       active = false
       controller.abort()
-      for (let i = cleanups.length - 1; i >= 0; i--) {
+      // newest first, copied since each cleanup removes itself
+      for (const cleanup of [...cleanups].reverse()) {
         try {
-          cleanups[i]()
+          cleanup()
         } catch (err) {
           console.error('[Taut] Error disposing plugin resource:', err)
         }
@@ -298,10 +306,13 @@ function createScopedAPI(
   const openModal = (options: OpenModalOptions): ModalHandle | null => {
     if (scope.signal.aborted) return null
     let open = true
+    let dismiss: (() => void) | undefined
+    // once the modal is closed, its dismissal is no longer needed
     const closing =
       (callback = () => {}) =>
       () => {
         open = false
+        if (dismiss) scope.release(dismiss)
         callback()
       }
     const handle = base.modal.openModal({
@@ -311,7 +322,7 @@ function createScopedAPI(
       onClose: closing(options.onClose),
     })
     // closing it when the plugin stops counts as a dismissal
-    const dismiss = scope.track(() => {
+    dismiss = scope.track(() => {
       handle.close()
       if (open) closing(options.onClose)()
     })
@@ -325,9 +336,19 @@ function createScopedAPI(
       ms: number,
       what?: string
     ) => base.within(work, ms, what && `${id}: ${what}`, scope.signal),
+    // dropped when the plugin stops, so a missing export doesn't hold its wait forever
+    waitForExport: ((matcher: any) =>
+      base.waitForExport(matcher, scope.signal)) as typeof base.waitForExport,
+    waitForRenderedComponent: (name: string) =>
+      base.waitForRenderedComponent(name, scope.signal),
+    lazyComponent: <P extends {}>(
+      name: string,
+      filter?: Parameters<typeof base.lazyComponent>[1]
+    ) => base.lazyComponent<P>(name, filter, scope.signal),
     patchComponent: tracked(base.patchComponent) as typeof base.patchComponent,
     redux: {
       ...base.redux,
+      subscribe: tracked(base.redux.subscribe),
       patchState: tracked(base.redux.patchState),
       patchSlice: tracked(base.redux.patchSlice),
       patchThunk: tracked(base.redux.patchThunk),

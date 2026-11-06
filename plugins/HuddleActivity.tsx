@@ -107,7 +107,7 @@ export default class HuddleActivity extends TautPlugin<typeof HuddleActivity> {
     for (const type of ['sh_room_join', 'sh_room_leave', 'sh_room_update'])
       this.api.rtm.on(type, (event) => this.onRoomEvent(event as RoomEvent))
 
-    const store = await this.api.redux.waitForStore()
+    await this.api.redux.waitForStore()
     if (this.api.signal.aborted) return
     this.api.huddles.onActiveHuddle((huddle) => {
       if (huddle?.callId === this.callId) return
@@ -117,7 +117,8 @@ export default class HuddleActivity extends TautPlugin<typeof HuddleActivity> {
       this.api.redux.refresh()
       this.keepLogOpen()
     })
-    this.unsubscribe = store.subscribe(this.keepLogOpen)
+    // follows the workspace, so switching doesn't leave the old store subscribed
+    this.unsubscribe = this.api.redux.subscribe(this.keepLogOpen)
   }
 
   stop() {
@@ -364,6 +365,10 @@ export default class HuddleActivity extends TautPlugin<typeof HuddleActivity> {
         background_id: call.backgroundId,
       })
     this.rooms.set(room.id, room)
+    // the websocket sends every huddle's updates, only this one and the current huddle are read
+    for (const id of this.rooms.keys()) {
+      if (id !== room.id && id !== this.callId) this.rooms.delete(id)
+    }
     if (event.type !== 'sh_room_update' || !before || room.id !== this.callId)
       return
 
