@@ -102,7 +102,7 @@ export default class LastSeen extends TautPlugin<typeof LastSeen> {
     )
 
     this.api.patchComponent<PresenceProps>(
-      'Presence',
+      'BasePresence',
       (Original) => (props) => {
         const surface = React.useContext(this.Surface)
         const id =

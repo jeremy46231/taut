@@ -3,6 +3,7 @@
 import { opt, TautPlugin } from '$taut'
 
 type ReactionProps = { users?: string[] }
+type ButtonProps = { 'data-qa'?: string; children?: React.ReactNode }
 
 // stable identity, so context consumers don't rerender
 const NO_REACTORS: string[] = []
@@ -98,12 +99,18 @@ export default class WhoReacted extends TautPlugin<typeof WhoReacted> {
     )
 
     // last child inside the reaction button, so the avatars land in the pill
-    this.api.patchComponent('ReactionAnimation', (Original) => (props) => (
-      <>
-        <Original {...props} />
-        <this.Reactors />
-      </>
-    ))
+    this.api.patchComponent<ButtonProps>(
+      'UnstyledButton',
+      (Original) => (props) =>
+        props['data-qa'] === 'reactji' ? (
+          <Original {...props}>
+            {props.children}
+            <this.Reactors />
+          </Original>
+        ) : (
+          <Original {...props} />
+        )
+    )
 
     this.log('Started')
   }
