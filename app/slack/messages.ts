@@ -346,6 +346,8 @@ export type SlackMessageMetadata = {
 }
 
 const metadataKnown = new Map<string, SlackMessageMetadata | null>()
+// past this many, the oldest answers are forgotten (and looked up again if read)
+const METADATA_KEEP = 2000
 type MetadataLookup = {
   key: string
   channel: string
@@ -508,7 +510,14 @@ function requestMetadata(batch: MetadataLookup[]) {
     (err) => {
       for (const lookup of batch) {
         // or every read would ask again
-        if (!lookup.controller.signal.aborted) metadataFailed.add(lookup.key)
+        if (!lookup.controller.signal.aborted) {
+          metadataFailed.delete(lookup.key)
+          metadataFailed.add(lookup.key)
+          if (metadataFailed.size > METADATA_KEEP) {
+            const [oldest] = metadataFailed
+            if (oldest !== undefined) metadataFailed.delete(oldest)
+          }
+        }
         forgetMetadataLookup(lookup)
         lookup.reject(err)
       }
@@ -520,7 +529,12 @@ function settleMetadata(
   lookup: MetadataLookup,
   metadata: SlackMessageMetadata | null
 ) {
+  metadataKnown.delete(lookup.key)
   metadataKnown.set(lookup.key, metadata)
+  if (metadataKnown.size > METADATA_KEEP) {
+    const [oldest] = metadataKnown.keys()
+    if (oldest !== undefined) metadataKnown.delete(oldest)
+  }
   forgetMetadataLookup(lookup)
   lookup.resolve(metadata)
   clearTimeout(metadataRepaint)

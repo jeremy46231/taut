@@ -112,7 +112,8 @@ const MISSING_MS = 30_000
  */
 export function lazyComponent<P extends {}>(
   name: string,
-  filter?: filter
+  filter?: filter,
+  signal?: AbortSignal
 ): React.ComponentType<P> {
   if (!filter) watchForDuplicates(name)
   const match = componentFilter(name, filter)
@@ -127,7 +128,7 @@ export function lazyComponent<P extends {}>(
       component.set(loaded)
       return
     }
-    waitForExport<React.ComponentType<P>>(match).then(component.set)
+    waitForExport<React.ComponentType<P>>(match, signal).then(component.set)
     setTimeout(() => {
       if (!component.get()) console.error(`[Taut] "${name}" is unavailable`)
     }, MISSING_MS)
@@ -196,17 +197,32 @@ export function getRenderedComponent(name: string): ComponentType | undefined {
 }
 
 /** for components Slack never exports, which resolve once something mounts one (avoid if you can) */
-export function waitForRenderedComponent(name: string): Promise<ComponentType> {
+export function waitForRenderedComponent(
+  name: string,
+  signal?: AbortSignal
+): Promise<ComponentType> {
   const seen = renderedComponents.get(name)
   if (seen) return Promise.resolve(seen)
 
   return new Promise((resolve) => {
+    if (signal?.aborted) return
     let waiters = renderedWaiters.get(name)
     if (!waiters) {
       waiters = new Set()
       renderedWaiters.set(name, waiters)
     }
-    waiters.add(resolve)
+    const set = waiters
+    const waiter = (type: ComponentType) => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve(type)
+    }
+    const onAbort = () => {
+      set.delete(waiter)
+      if (!set.size && renderedWaiters.get(name) === set)
+        renderedWaiters.delete(name)
+    }
+    set.add(waiter)
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
 

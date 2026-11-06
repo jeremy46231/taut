@@ -336,6 +336,15 @@ function createScopedAPI(
       ms: number,
       what?: string
     ) => base.within(work, ms, what && `${id}: ${what}`, scope.signal),
+    // dropped when the plugin stops, so a missing export doesn't hold its wait forever
+    waitForExport: ((matcher: any) =>
+      base.waitForExport(matcher, scope.signal)) as typeof base.waitForExport,
+    waitForRenderedComponent: (name: string) =>
+      base.waitForRenderedComponent(name, scope.signal),
+    lazyComponent: <P extends {}>(
+      name: string,
+      filter?: Parameters<typeof base.lazyComponent>[1]
+    ) => base.lazyComponent<P>(name, filter, scope.signal),
     patchComponent: tracked(base.patchComponent) as typeof base.patchComponent,
     redux: {
       ...base.redux,

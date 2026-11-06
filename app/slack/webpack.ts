@@ -87,22 +87,38 @@ const pendingMatchers = new Map<
   { matcher: SimpleMatcher; resolve: (exp: any) => void }
 >()
 
-/** resolves once a matching export loads, right away if one has */
-export function waitForExport<T>(matcher: ExportMatcher<T>): Promise<T>
-export function waitForExport<T>(matcher: SimpleMatcher): Promise<T>
-export function waitForExport(matcher: SimpleMatcher): Promise<any> {
+/**
+ * resolves once a matching export loads, right away if one has
+ * with `signal`, a wait that aborts is dropped and never resolves (so it can be collected)
+ */
+export function waitForExport<T>(
+  matcher: ExportMatcher<T>,
+  signal?: AbortSignal
+): Promise<T>
+export function waitForExport<T>(
+  matcher: SimpleMatcher,
+  signal?: AbortSignal
+): Promise<T>
+export function waitForExport(
+  matcher: SimpleMatcher,
+  signal?: AbortSignal
+): Promise<any> {
   const existing = getExport(matcher)
   if (existing !== undefined) return Promise.resolve(existing)
 
   return new Promise((resolve) => {
+    if (signal?.aborted) return
     const id = Symbol()
+    const onAbort = () => pendingMatchers.delete(id)
     pendingMatchers.set(id, {
       matcher,
       resolve: (exp) => {
         pendingMatchers.delete(id)
+        signal?.removeEventListener('abort', onAbort)
         resolve(exp)
       },
     })
+    signal?.addEventListener('abort', onAbort, { once: true })
   })
 }
 
