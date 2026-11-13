@@ -88,6 +88,19 @@ export type TautCookie = {
   expirationDate?: number
 }
 
+export type TautTrayEvent =
+  | 'click'
+  | 'right-click'
+  | 'middle-click'
+  | 'double-click'
+
+export type TautTrayState = {
+  /** Slack has made its menu bar or notification area icon */
+  present: boolean
+  /** a plugin has hidden it */
+  hidden: boolean
+}
+
 // structured-cloneable
 export type SerialResponse = {
   status: number
@@ -119,6 +132,16 @@ export type TautBridge = {
     list(): Promise<TautLoaderSetting[]>
     /** true on success */
     set(id: string, value: boolean): Promise<boolean>
+  }
+
+  /** Slack's menu bar or notification area icon, desktop only, older loaders leave it out */
+  readonly tray?: {
+    state(): Promise<TautTrayState>
+    /** hides or shows the icon, undone when the page reloads */
+    setHidden(hidden: boolean): void
+    /** the icon's own click handling is skipped for these events, they come to `onEvent` instead, undone when the page reloads */
+    intercept(events: TautTrayEvent[]): void
+    onEvent(cb: (event: TautTrayEvent) => void): Unsubscribe
   }
 
   /** integer version of the bridge API, only goes up */
