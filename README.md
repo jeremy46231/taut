@@ -24,7 +24,7 @@ Turn plugins on and off in `Preferences` > `Taut`, where you can also write your
 
 <!-- begin plugins (written by scripts/readme.ts) -->
 
-<details><summary>All 39 plugins</summary>
+<details><summary>All 40 plugins</summary>
 
 #### Messages
 
@@ -46,6 +46,7 @@ Turn plugins on and off in `Preferences` > `Taut`, where you can also write your
 - **Haiku Warning** (Hack Club only): Warns before you send a haiku that Orpheus would repeat in the thread
 - **Invisible Forward**: Makes Slack links at the start of your messages invisible, like a forwarded message
 - **Native At Channel** (Hack Club only): Sends @channel and @here through at-channel where you can't ping yourself
+- **Neutral Pronouns**: Rewrites he/she pronouns in messages you send to they/them, fixing the verbs around them
 - **Real Markdown**: Formats standard Markdown as you type, instead of Slack's markup
 - **Restricted Channel Warning**: Shows admins the "Only certain people can post" box where only admins can post
 - **Silent Typing**: Adds a button to hide your typing indicator, so others can't see when you're typing
