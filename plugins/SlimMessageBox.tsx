@@ -300,9 +300,10 @@ const layoutCss = (hiddenButtons: number, broadcastCheckbox: boolean) => `
   ${ONE_LINE} .c-basic_container__body > :empty { display: none; }
   ${ONE_LINE} .c-wysiwyg_container__formatting { order: 1; }
   ${ONE_LINE} .c-wysiwyg_container__message_suggestions { order: 2; }
+  /* a huge grow so the footer beside it gets well under a pixel of the spare width, which the suffix's auto margin would show as a gap */
   ${ONE_LINE} .c-texty_input_unstyled__container {
     order: 3;
-    flex: 100 1 0% !important;
+    flex: 100000 1 0% !important;
     min-width: min(${MIN_EDITOR_WIDTH}px, 100%);
   }
   ${ONE_LINE} .c-wysiwyg_container__draft { order: 4; }
