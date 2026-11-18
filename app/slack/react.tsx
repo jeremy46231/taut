@@ -106,14 +106,23 @@ onModuleLoaded((exports) => {
 
 const MISSING_MS = 30_000
 
+export interface LazyComponentOptions {
+  /** picks Slack's component when others share the name */
+  filter?: filter
+  /** renders its children until the component turns up (for triggers and tooltips) */
+  wrapper?: boolean
+}
+
 /**
- * renders nothing until the component turns up
+ * renders nothing (or a wrapper's children) until the component turns up
  * if you use this, consider moving it to `api.elements`
  */
 export function lazyComponent<P extends {}>(
   name: string,
-  filter?: filter
+  options?: filter | LazyComponentOptions
 ): React.ComponentType<P> {
+  const { filter, wrapper } =
+    typeof options === 'function' ? { filter: options } : (options ?? {})
   if (!filter) watchForDuplicates(name)
   const match = componentFilter(name, filter)
   const component = new Store<React.ComponentType<P> | undefined>(undefined)
@@ -137,7 +146,9 @@ export function lazyComponent<P extends {}>(
     // resolving on the first render keeps an already-loaded component from flashing
     look()
     const Component = component.use()
-    return Component ? <Component {...props} /> : null
+    if (Component) return <Component {...props} />
+    if (!wrapper) return null
+    return <>{(props as { children?: React.ReactNode }).children}</>
   }
   LazyComponent.displayName = `Lazy(${name})`
   return LazyComponent

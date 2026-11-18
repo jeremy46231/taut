@@ -373,14 +373,15 @@ export const elementsAPIPromise = (async () => {
     SvgIcon: lazyComponent<SvgIconProps>('SvgIcon'),
     Avatar: lazyComponent<AvatarProps>('ConnectedBaseAvatar'),
     ProfileHoverTrigger: lazyComponent<ProfileHoverTriggerProps>(
-      'ProfileHoverTrigger'
+      'ProfileHoverTrigger',
+      { wrapper: true }
     ),
     MrkdwnElement: lazyComponent<MrkdwnElementProps>('MrkdwnElement'),
     Button: lazyComponent<ButtonProps>('Button', drawing('"c-button"')),
-    Tooltip: lazyComponent<TooltipProps>(
-      'Tooltip',
-      drawing('"data-sk":"tooltip"')
-    ),
+    Tooltip: lazyComponent<TooltipProps>('Tooltip', {
+      filter: drawing('"data-sk":"tooltip"'),
+      wrapper: true,
+    }),
     IconButtonBase: lazyComponent<IconButtonBaseProps>('IconButtonBase'),
     ConfirmationModal:
       lazyComponent<ConfirmationModalProps>('ConfirmationModal'),
@@ -391,21 +392,27 @@ export const elementsAPIPromise = (async () => {
     FilterPill: lazyComponent<FilterPillProps>('FilterPill'),
     Tag: lazyComponent<TagProps>('Tag'),
     DateRangePicker: lazyComponent<DateRangePickerProps>('DateRangePicker'),
-    DatePickerTrigger:
-      lazyComponent<DatePickerTriggerProps>('DatePickerTrigger'),
+    DatePickerTrigger: lazyComponent<DatePickerTriggerProps>(
+      'DatePickerTrigger',
+      { wrapper: true }
+    ),
     FieldSet: lazyComponent<FieldSetProps>('FieldSet'),
     Legend: lazyComponent<LegendProps>('Legend', drawing('"c-legend"')),
     Hint: lazyComponent<HintProps>('Hint'),
     BasicSelect: lazyComponent<BasicSelectProps>('BasicSelect'),
     Blocks: lazyComponent<BlocksProps>('Blocks'),
-    MenuTrigger: lazyComponent<MenuTriggerProps>('MenuTrigger'),
+    MenuTrigger: lazyComponent<MenuTriggerProps>('MenuTrigger', {
+      wrapper: true,
+    }),
     MenuFromTemplate: lazyComponent<MenuFromTemplateProps>('MenuFromTemplate'),
     ContextMenuTrigger: lazyComponent<ContextMenuTriggerProps>(
-      'withKeyboardFocusContext(ContextMenuTrigger)'
+      'ContextMenuTrigger',
+      { wrapper: true }
     ),
     TimePicker: lazyComponent<TimePickerProps>('TimePicker'),
     EmojiMenuTrigger: lazyComponent<EmojiMenuTriggerProps>(
-      'Connect(EmojiMenuTrigger)'
+      'Connect(EmojiMenuTrigger)',
+      { wrapper: true }
     ),
     Popover: lazyComponent<PopoverProps>('Popover', drawing('"c-popover"')),
     RichTextInput,
