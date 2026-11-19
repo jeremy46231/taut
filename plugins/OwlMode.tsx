@@ -518,6 +518,15 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       }
     )
 
+    // the hover toolbar's one-click reactions
+    this.api.patchComponent(
+      'BaseQuickReactionActions',
+      (Original) => (props) => {
+        const owl = React.useContext(this.InOwlThread)
+        return owl && !canReact(owl) ? null : <Original {...props} />
+      }
+    )
+
     this.api.patchComponent<{
       ts?: string
       threadTs?: string
