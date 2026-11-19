@@ -111,7 +111,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
   static readonly pluginName = 'Owl Mode'
   static readonly description =
     'Lets you reply and react anonymously as the author of your owl and djungelskog confessions'
-  static readonly authors = ['jeremy'] as const
+  static readonly authors = ['jeremy', 'izie'] as const
   static readonly category = 'messages'
   static readonly hackClubOnly = true
   static readonly defaultConfig = {
