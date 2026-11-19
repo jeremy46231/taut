@@ -96,6 +96,7 @@ export async function bootstrap(bridge: NormalizedBridge): Promise<void> {
   } catch (err) {
     console.error('[Taut] Failed to load user plugins:', err)
   }
+  pluginManager.startUrlPluginUpdates()
 
   // plugins loaded, so stop using the cached experiment settings
   if (!safeMode) switchToLiveExperiments()
