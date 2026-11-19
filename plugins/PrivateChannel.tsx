@@ -576,13 +576,10 @@ export default class PrivateChannel extends TautPlugin<typeof PrivateChannel> {
     ]
     return (
       <ContextMenu template={template}>
-        <button
-          type="button"
-          className="c-button-unstyled c-missing_channel--private"
-        >
+        <span className="c-missing_channel--private">
           <SvgIcon inline={true} name="lock" />
           {name}
-        </button>
+        </span>
       </ContextMenu>
     )
   }
