@@ -101,6 +101,11 @@ function infoOf(saved: string): AnonApp {
 function owlOf(saved: string): Owl {
   return infoOf(saved).theme
 }
+/** whether `owl`'s bot can react anonymously */
+function canReact(owl: Owl): boolean {
+  return !!Object.values(OWL_APPS).find((app) => app.theme === owl)
+    ?.reactShortcut
+}
 /** the class that colors an element for `owl`, red for the demo */
 function themeClass(owl: Owl): string {
   return owl === 'owl' ? '' : ` taut-owl-${owl}`
@@ -205,6 +210,13 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       .c-reaction_bar.taut-owl-reactions .c-reaction--reacted:hover {
         background-color: rgba(var(--taut-owl), 0.15);
         color: var(--dt_color-content-pry);
+      }
+      .c-reaction_bar.taut-owl-noreact [data-qa="add_reaction_button"] {
+        display: none;
+      }
+      .c-reaction_bar.taut-owl-noreact .c-reaction {
+        pointer-events: none;
+        opacity: 0.6;
       }
       .taut-owl-action,
       .taut-owl-picker {
@@ -429,6 +441,14 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
           const target = this.reactionTarget(args?.key)
           if (!target || !args.name) return original(args, ...rest)
           const name = args.name
+          const info = infoOf(this.confessionOf(target) ?? '')
+          // never react as you in a thread in owl mode
+          if (!info.reactShortcut)
+            return () =>
+              this.failed(
+                'Reaction not sent',
+                new Error(`${info.name} can't react anonymously`)
+              )
           return () =>
             this.reactAsOwl(target, name).catch((err) =>
               this.failed("Your anonymous reaction wasn't sent", err)
@@ -459,7 +479,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
         <this.InOwlThread.Provider value={owl.owl}>
           <Original
             {...props}
-            className={`${props.className ?? ''} taut-owl-reactions${themeClass(owl.owl)}`}
+            className={`${props.className ?? ''} taut-owl-reactions${themeClass(owl.owl)}${canReact(owl.owl) ? '' : ' taut-owl-noreact'}`}
             // pills show as pressed where owl reacted
             currentUser={owl.user}
           />
@@ -486,6 +506,8 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       'MessageActionButtonReaction',
       (Original) => (props) => {
         const owl = React.useContext(this.InOwlThread)
+        // its bot can't react, and reacting as you would out you
+        if (owl && !canReact(owl)) return null
         return owl ? (
           <span className={`taut-owl-action${themeClass(owl)}`}>
             <Original {...props} />
@@ -675,9 +697,6 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     if (!ts || !channelId) return
     const msg = this.api.messages.getRawMessage(channelId, ts)
     const threadTs = String(msg?.thread_ts ?? ts)
-    const id = this.confessionOf({ channelId, threadTs })
-    // not every bot can react
-    if (!id || !infoOf(id).reactShortcut) return
     return this.isOn({ channelId, threadTs })
       ? { channelId, threadTs, ts }
       : undefined
