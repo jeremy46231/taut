@@ -1,18 +1,22 @@
-// Lets you reply and react anonymously as the author of your owl and djungelskog confessions
+// Lets you reply anonymously as the author of your owl and djungelskog confessions, and react through owl
 
 import { opt, TautPlugin } from '$taut'
 
+/** an anonymous posting bot whose posts you can reply to as their author */
 type AnonApp = {
   /** prefix of its saved ids */
   prefix: string
   name: string
-  theme: Owl
+  /** colors its threads, see `themeClass` */
+  theme: Theme
   /** the post number at the start of a post's text */
   postRe: RegExp
   replyShortcut: string
   reactShortcut?: string
-  /** its reply field takes plain text rather than rich text */
-  plainText?: boolean
+  /** its reply field takes a mrkdwn string rather than rich text */
+  mrkdwn?: boolean
+  /** how mentions in a reply come out */
+  mentionsAs: string
   keyRe: RegExp
   keyError: string
   /** a post can be linked to the account instead of a key */
@@ -29,6 +33,7 @@ const OWL: AnonApp = {
   reactShortcut: 'React anonymously',
   keyRe: /^[0-9a-f]{64}$/,
   keyError: 'Owl reply keys are 64 hexadecimal characters',
+  mentionsAs: 'plain IDs',
   hash: true,
   confirm: {
     post: /(?:Post|Confession) #(\d+)/,
@@ -36,7 +41,7 @@ const OWL: AnonApp = {
     hash: 'recognized through its salted hash',
   },
 }
-const OWL_APPS: Readonly<Record<string, AnonApp>> = {
+const ANON_APPS: Readonly<Record<string, AnonApp>> = {
   A0C5L27PB9P: OWL,
   A0CDBA8FXDL: { ...OWL, prefix: 'demo', name: '(demo) Owl', theme: 'demo' },
   // #lgbtq-space's anon bot, https://github.com/espcaa/djungelskog
@@ -46,7 +51,8 @@ const OWL_APPS: Readonly<Record<string, AnonApp>> = {
     theme: 'dj',
     postRe: /^\*#?(\d+)\*: /,
     replyShortcut: 'reply anonymously',
-    plainText: true,
+    mrkdwn: true,
+    mentionsAs: 'plain names',
     keyRe: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     keyError:
       'djungelskog reply keys look like 1a2b3c4d-1a2b-1a2b-1a2b-1a2b3c4d5e6f',
@@ -56,12 +62,12 @@ const OWL_APPS: Readonly<Record<string, AnonApp>> = {
     },
   },
 }
-/** how long to wait for owl's shortcuts to load and for its modal to open */
-const OWL_TIMEOUT = 10_000
+/** how long to wait for a bot's shortcuts to load and for its modal to open */
+const BOT_TIMEOUT = 10_000
 
 type Block = Record<string, any>
 type Owned = { key: string | null }
-type Owl = 'owl' | 'demo' | 'dj'
+type Theme = 'owl' | 'demo' | 'dj'
 type Thread = { channelId: string; threadTs: string }
 type Confirmation = { id: string; replyKey: string | null }
 type SendArgs = {
@@ -82,40 +88,31 @@ const DRAFT_ID_RE = /^([A-Z0-9]+)-(\d+\.\d+)$/
 const REACTION_KEY_RE = /^message-(\d+\.\d+)-([A-Z0-9]+)$/
 
 function savedId(app: string, id: string): string {
-  const prefix = OWL_APPS[app]?.prefix
+  const prefix = ANON_APPS[app]?.prefix
   return prefix ? `${prefix}-${id}` : id
 }
 function parseSaved(saved: string) {
   const [, prefix = '', id = saved] = /^(?:([a-z]+)-)?(\d+)$/.exec(saved) ?? []
-  const app = Object.keys(OWL_APPS).find(
-    (app) => OWL_APPS[app].prefix === prefix
+  const app = Object.keys(ANON_APPS).find(
+    (app) => ANON_APPS[app].prefix === prefix
   )
-  const info = app ? OWL_APPS[app] : undefined
+  const info = app ? ANON_APPS[app] : undefined
   return { app, info, label: `${info?.name ?? 'Owl'} #${id}` }
 }
 /** the bot a saved id belongs to */
 function infoOf(saved: string): AnonApp {
   return parseSaved(saved).info ?? OWL
 }
-/** which owl a saved id belongs to */
-function owlOf(saved: string): Owl {
-  return infoOf(saved).theme
-}
-/** whether `owl`'s bot can react anonymously */
-function canReact(owl: Owl): boolean {
-  return !!Object.values(OWL_APPS).find((app) => app.theme === owl)
-    ?.reactShortcut
-}
-/** the class that colors an element for `owl`, red for the demo */
-function themeClass(owl: Owl): string {
-  return owl === 'owl' ? '' : ` taut-owl-${owl}`
+/** the class that colors an element for `bot`: blue for owl, red for the demo */
+function themeClass(bot: AnonApp): string {
+  return bot.theme === 'owl' ? '' : ` taut-owl-${bot.theme}`
 }
 
 export default class OwlMode extends TautPlugin<typeof OwlMode> {
   static readonly id = 'OwlMode'
   static readonly pluginName = 'Owl Mode'
   static readonly description =
-    'Lets you reply and react anonymously as the author of your owl and djungelskog confessions'
+    'Lets you reply anonymously as the author of your owl and djungelskog confessions, and react through owl'
   static readonly authors = ['jeremy', 'izie'] as const
   static readonly category = 'messages'
   static readonly hackClubOnly = true
@@ -155,8 +152,8 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     'composers',
     []
   )
-  /** which owl a thread in owl mode goes through, down to the popovers it opens */
-  private readonly InOwlThread = React.createContext<Owl | null>(null)
+  /** which bot a thread in owl mode goes through, down to the popovers it opens */
+  private readonly InOwlThread = React.createContext<AnonApp | null>(null)
 
   async start() {
     await Promise.all([this.confessions.ready, this.mentionsWarned.ready])
@@ -308,7 +305,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       const thread = this.useThread(props.channelId, props.threadTs)
       if (!thread?.on) return <Original {...props} />
       return (
-        <this.InOwlThread.Provider value={owlOf(thread.id)}>
+        <this.InOwlThread.Provider value={infoOf(thread.id)}>
           <Original
             {...props}
             enableFileButton={false}
@@ -327,11 +324,11 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     this.api.patchComponent<{ className?: string }>(
       'WysiwygContainer',
       (Original) => (props) => {
-        const owl = React.useContext(this.InOwlThread)
-        return owl ? (
+        const bot = React.useContext(this.InOwlThread)
+        return bot ? (
           <Original
             {...props}
-            className={`${props.className ?? ''} taut-owl-composer${themeClass(owl)}`}
+            className={`${props.className ?? ''} taut-owl-composer${themeClass(bot)}`}
           />
         ) : (
           <Original {...props} />
@@ -354,7 +351,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       if (!thread || !on) return <Original {...props} />
       return (
         <div
-          className={`p-context_bar_v2 taut-owl-context-bar${themeClass(owlOf(thread.id))}`}
+          className={`p-context_bar_v2 taut-owl-context-bar${themeClass(infoOf(thread.id))}`}
           data-qa="context_bar"
           data-context-bar
         >
@@ -444,7 +441,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
           const info = infoOf(this.confessionOf(target) ?? '')
           // never react as you in a thread in owl mode
           if (!info.reactShortcut)
-            return () =>
+            return async () =>
               this.failed(
                 'Reaction not sent',
                 new Error(`${info.name} can't react anonymously`)
@@ -476,11 +473,11 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       const owl = this.useReactionOwl(props.reactionKey)
       if (!owl) return <Original {...props} />
       return (
-        <this.InOwlThread.Provider value={owl.owl}>
+        <this.InOwlThread.Provider value={owl.bot}>
           <Original
             {...props}
-            className={`${props.className ?? ''} taut-owl-reactions${themeClass(owl.owl)}${canReact(owl.owl) ? '' : ' taut-owl-noreact'}`}
-            // pills show as pressed where owl reacted
+            className={`${props.className ?? ''} taut-owl-reactions${themeClass(owl.bot)}${owl.bot.reactShortcut ? '' : ' taut-owl-noreact'}`}
+            // pills show as pressed where the bot reacted
             currentUser={owl.user}
           />
         </this.InOwlThread.Provider>
@@ -496,7 +493,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
         )
         if (!owl) return <Original {...props} />
         return (
-          <this.InOwlThread.Provider value={owl.owl}>
+          <this.InOwlThread.Provider value={owl.bot}>
             <Original {...props} />
           </this.InOwlThread.Provider>
         )
@@ -505,11 +502,11 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     this.api.patchComponent(
       'MessageActionButtonReaction',
       (Original) => (props) => {
-        const owl = React.useContext(this.InOwlThread)
-        // its bot can't react, and reacting as you would out you
-        if (owl && !canReact(owl)) return null
-        return owl ? (
-          <span className={`taut-owl-action${themeClass(owl)}`}>
+        const bot = React.useContext(this.InOwlThread)
+        // the bot can't react, and reacting as you would out you
+        if (bot && !bot.reactShortcut) return null
+        return bot ? (
+          <span className={`taut-owl-action${themeClass(bot)}`}>
             <Original {...props} />
           </span>
         ) : (
@@ -522,8 +519,8 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     this.api.patchComponent(
       'BaseQuickReactionActions',
       (Original) => (props) => {
-        const owl = React.useContext(this.InOwlThread)
-        return owl && !canReact(owl) ? null : <Original {...props} />
+        const bot = React.useContext(this.InOwlThread)
+        return bot && !bot.reactShortcut ? null : <Original {...props} />
       }
     )
 
@@ -535,15 +532,15 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       const thread = this.useThread(props.channelId, props.threadTs ?? props.ts)
       if (!thread?.on) return <Original {...props} />
       return (
-        <this.InOwlThread.Provider value={owlOf(thread.id)}>
+        <this.InOwlThread.Provider value={infoOf(thread.id)}>
           <Original {...props} />
         </this.InOwlThread.Provider>
       )
     })
     this.api.patchComponent('EmojiPicker', (Original) => (props) => {
-      const owl = React.useContext(this.InOwlThread)
-      return owl ? (
-        <div className={`taut-owl-picker${themeClass(owl)}`}>
+      const bot = React.useContext(this.InOwlThread)
+      return bot ? (
+        <div className={`taut-owl-picker${themeClass(bot)}`}>
           <Original {...props} />
         </div>
       ) : (
@@ -559,14 +556,13 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
           mentions = true
         return element
       })
-      const id = this.confessionOf({ channelId, threadTs })
-      if (id && infoOf(id).plainText) return true
       if (!mentions || this.mentionsWarned.get()) return true
+      const bot = infoOf(this.confessionOf({ channelId, threadTs }) ?? '')
       this.mentionsWarned
         .set(true)
         .catch((err) => this.log('Could not save the mention warning', err))
       return this.api.modal.confirm({
-        title: 'Owl will show mentions as plain IDs',
+        title: `${bot.name} will show mentions as ${bot.mentionsAs}`,
         body: "People you mention won't be notified.",
         confirmText: 'Send anyway',
         cancelText: 'Keep editing',
@@ -578,7 +574,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       (Original) => (props) => {
         const app = props.view?.appId
         const shown =
-          app && Object.hasOwn(OWL_APPS, app)
+          app && Object.hasOwn(ANON_APPS, app)
             ? parseConfirmation(props.view?.blocks, app)
             : undefined
         if (!shown) return <Original {...props} />
@@ -624,7 +620,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
             <Button
               type="outline"
               size="small"
-              className={`p-block_kit_button_element taut-owl-save__button${themeClass(owlOf(id))}`}
+              className={`p-block_kit_button_element taut-owl-save__button${themeClass(infoOf(id))}`}
               disabled={saved}
               onClick={() => this.save(id, replyKey)}
             >
@@ -658,14 +654,14 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     return [
       msg.bot_profile?.app_id,
       this.api.redux.getRawState()?.bots?.[msg.bot_id]?.app_id,
-    ].find((app) => typeof app === 'string' && Object.hasOwn(OWL_APPS, app))
+    ].find((app) => typeof app === 'string' && Object.hasOwn(ANON_APPS, app))
   }
 
   /** the saved id of an owl post */
   private confessionOf({ channelId, threadTs }: Thread): string | undefined {
     const root = this.api.messages.getRawMessage(channelId, threadTs)
     const app = this.owlAppOf(root)
-    const id = app && OWL_APPS[app].postRe.exec(String(root?.text ?? ''))?.[1]
+    const id = app && ANON_APPS[app].postRe.exec(String(root?.text ?? ''))?.[1]
     return id ? savedId(app, id) : undefined
   }
 
@@ -711,10 +707,10 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
       : undefined
   }
 
-  /** owl's member id where a reaction bar is in owl mode, and which owl it is */
+  /** the bot's member id where a reaction bar is in owl mode, and which bot it is */
   private useReactionOwl(
     reactionKey: string | undefined
-  ): { user: string; owl: Owl } | undefined {
+  ): { user: string; bot: AnonApp } | undefined {
     // rerenders when owl mode turns on or off
     this.confessions.use()
     this.modes.use()
@@ -727,13 +723,11 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     }
     // separate selectors, an object would never compare equal
     const user = this.api.redux.useReduxState(() => {
-      const owl = root()?.user
-      return typeof owl === 'string' ? owl : undefined
+      const bot = root()?.user
+      return typeof bot === 'string' ? bot : undefined
     })
-    const owl = this.api.redux.useReduxState<Owl>(
-      () => OWL_APPS[this.owlAppOf(root()) ?? '']?.theme ?? 'owl'
-    )
-    return user ? { user, owl: owl ?? 'owl' } : undefined
+    const app = this.api.redux.useReduxState(() => this.owlAppOf(root()))
+    return user && app ? { user, bot: ANON_APPS[app] } : undefined
   }
 
   private setMode({ channelId, threadTs }: Thread, on: boolean) {
@@ -781,10 +775,11 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
   }
 
   private async confirmForget(id: string) {
+    const { name } = infoOf(id)
     const forget = await this.api.modal.confirm({
       title: `Forget ${parseSaved(id).label}?`,
       body: this.ownedRecord(id)?.key
-        ? "Copy the reply key first if it isn't saved anywhere else. Owl can't show it again."
+        ? `Copy the reply key first if it isn't saved anywhere else. ${name} can't show it again.`
         : 'You can save it again from the glasses button.',
       confirmText: 'Forget',
       danger: true,
@@ -875,7 +870,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     const richText = blocks.find((block) => block.type === 'rich_text')
     if (!richText) throw new Error('Nothing to send')
     const key = record.key ?? ''
-    const values = info.plainText
+    const values = info.mrkdwn
       ? {
           reply_anon_key: {
             reply_anon_key: { type: 'plain_text_input', value: key },
@@ -883,7 +878,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
           reply_anon_text: {
             reply_anon_text: {
               type: 'plain_text_input',
-              value: await this.api.blocks.toPlainText([richText]),
+              value: await this.toMrkdwn(richText),
             },
           },
         }
@@ -937,7 +932,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
             )?.id,
           signal
         ),
-      OWL_TIMEOUT,
+      BOT_TIMEOUT,
       `owl's "${name}" shortcut`
     )
     if (!id) throw new Error(`The "${name}" shortcut isn't available`)
@@ -953,7 +948,7 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     values: Record<string, unknown>
   ) {
     const { app } = parseSaved(id)
-    if (!app) throw new Error("Taut doesn't know that anon bot")
+    if (!app) throw new Error(`Taut doesn't know ${parseSaved(id).label}`)
     const actionId = await this.owlShortcut(app, shortcut)
     // slack's format, it parses the timestamp
     this.lastToken = Math.max(Date.now(), this.lastToken + 1)
@@ -963,8 +958,8 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     const opened = new Promise<string>((resolve, reject) => {
       timer = setTimeout(() => {
         this.views.delete(clientToken)
-        reject(new Error("The anon bot didn't answer"))
-      }, OWL_TIMEOUT)
+        reject(new Error(`${infoOf(id).name} didn't answer`))
+      }, BOT_TIMEOUT)
       this.views.set(clientToken, (viewId) => {
         clearTimeout(timer)
         this.views.delete(clientToken)
@@ -1001,11 +996,79 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
     }
   }
 
+  /** a rich text block as mrkdwn, for a bot that posts it as is */
+  private async toMrkdwn(richText: Block): Promise<string> {
+    const plain = (element: Block) =>
+      this.api.blocks.toPlainText([{ type: 'rich_text', elements: [element] }])
+    const inline = async (elements: Block[] = []) => {
+      let out = ''
+      for (const el of elements) {
+        if (el.type === 'text') {
+          let text = escapeMrkdwn(String(el.text ?? ''))
+          const { bold, italic, strike, code } = el.style ?? {}
+          text = styled(text, '`', code)
+          text = styled(text, '_', italic)
+          text = styled(text, '*', bold)
+          text = styled(text, '~', strike)
+          out += text
+        } else if (el.type === 'link') {
+          const url = String(el.url ?? '').replace(/[|>]/g, encodeURIComponent)
+          out += el.text
+            ? `<${url}|${escapeMrkdwn(String(el.text))}>`
+            : `<${url}>`
+        } else if (el.type === 'emoji') {
+          out += `:${el.name}:`
+        } else {
+          // mentions and the rest as Slack writes them, so nothing pings
+          out += escapeMrkdwn(
+            await plain({ type: 'rich_text_section', elements: [el] })
+          )
+        }
+      }
+      return out
+    }
+    const parts: string[] = []
+    for (const block of (richText.elements ?? []) as Block[]) {
+      if (block.type === 'rich_text_section') {
+        parts.push(await inline(block.elements))
+      } else if (block.type === 'rich_text_quote') {
+        const text = await inline(block.elements)
+        parts.push(
+          text
+            .split('\n')
+            .map((line) => `> ${line}`)
+            .join('\n')
+        )
+      } else if (block.type === 'rich_text_preformatted') {
+        const text = (block.elements ?? [])
+          .map((el: Block) => (el.type === 'text' ? el.text : ''))
+          .join('')
+        parts.push(`${FENCE}${escapeMrkdwn(text)}${FENCE}`)
+      } else if (block.type === 'rich_text_list') {
+        const indent = '    '.repeat(Number(block.indent) || 0)
+        const start = Number(block.offset) || 0
+        const items: string[] = []
+        for (const [i, item] of ((block.elements ?? []) as Block[]).entries()) {
+          const bullet = block.style === 'ordered' ? `${start + i + 1}.` : '•'
+          items.push(`${indent}${bullet} ${await inline(item.elements)}`)
+        }
+        parts.push(items.join('\n'))
+      } else {
+        parts.push(escapeMrkdwn(await plain(block)))
+      }
+    }
+    // a section before a list or quote already ends in a newline
+    return parts
+      .map((part) => part.replace(/\n$/, ''))
+      .join('\n')
+      .trimEnd()
+  }
+
   /** dispatches one of `thunks`, failing if Slack doesn't have it in time */
   private async dispatch(name: keyof OwlMode['thunks'], args: object) {
     const create = await this.api.within(
       this.thunks[name],
-      OWL_TIMEOUT,
+      BOT_TIMEOUT,
       `Slack's ${name} action`
     )
     // a user action, so the store exists by now
@@ -1024,7 +1087,18 @@ export default class OwlMode extends TautPlugin<typeof OwlMode> {
   }
 }
 
-/** owl's confirmation, in its modal or its DM, as shown when you submit */
+/** text that shows as typed in mrkdwn, not as a ping or link */
+function escapeMrkdwn(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+/** wraps `text` in a mrkdwn `mark`, outside its edge whitespace, which would break it */
+function styled(text: string, mark: string, on: unknown): string {
+  if (!on) return text
+  const [, lead, body, trail] = /^(\s*)([\s\S]*?)(\s*)$/.exec(text) ?? []
+  return body ? `${lead}${mark}${body}${mark}${trail}` : text
+}
+
+/** a bot's confirmation, in its modal or its DM, as shown when you submit */
 function parseConfirmation(
   blocks: unknown,
   app: string
@@ -1034,7 +1108,7 @@ function parseConfirmation(
     .map((block: Block) => block?.text?.text)
     .filter((t) => typeof t === 'string')
     .join('\n')
-  const { confirm } = OWL_APPS[app]
+  const { confirm } = ANON_APPS[app]
   const number = confirm.post.exec(text)?.[1]
   if (!number) return
   const id = savedId(app, number)
