@@ -28,7 +28,7 @@ Turn plugins on and off in `Preferences` > `Taut`, where you can also write your
 
 #### Messages
 
-- **Bring Back Slackbot**: Shows Slackbot's custom responses as sent by Slackbot again
+- **Bring Back Slackbot** (Hack Club only): Shows Slackbot's custom responses as sent by Slackbot again
 - **Copy Reacted**: Copies the list of people who reacted to a message
 - **Owl Mode** (Hack Club only): Lets you reply and react anonymously as the author of your owl confessions
 - **Show Real User**: Shows the user who sent a message via a bot like at-channel

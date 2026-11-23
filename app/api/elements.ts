@@ -12,6 +12,13 @@ export type SvgIconProps = {
   inline?: boolean
 }
 
+export type IconProps = {
+  /** a `c-icon--` icon font name */
+  type: string
+  size?: number | 'inherit'
+  inline?: boolean
+}
+
 export type MrkdwnElementProps = {
   text: string
 }
@@ -371,6 +378,7 @@ export const elementsAPIPromise = (async () => {
 
   return {
     SvgIcon: lazyComponent<SvgIconProps>('SvgIcon'),
+    Icon: lazyComponent<IconProps>('Icon'),
     Avatar: lazyComponent<AvatarProps>('ConnectedBaseAvatar'),
     ProfileHoverTrigger: lazyComponent<ProfileHoverTriggerProps>(
       'ProfileHoverTrigger',

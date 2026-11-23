@@ -9,6 +9,10 @@ Each release is a `## x.y.z` heading, and each change is one bullet:
 - `- **Plugin Name**: Fixed what was broken` for a plugin fix
 - `- What changed` for a change to Taut itself
 
+## 3.7.5
+
+- **Bring Back Slackbot**: Fixed after a Slack update
+
 ## 3.7.3
 
 - **Private Channel**: Fixed mentions of private channels you're not in showing as blank after a Slack update
