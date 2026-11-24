@@ -1058,9 +1058,115 @@ export class PluginManager {
     })
   }
 
+  // --- plugins imported from a URL -------------------------------------------
+  //
+  // The URL is kept in its own blob store, not in the plugin's code. A checked
+  // update replaces the code the same way "Update code" does. A file or paste
+  // import clears the URL, so a manual edit is never overwritten.
+
+  private static readonly URL_CHECK_MS = 6 * 3600_000
+  private urlCheckTimer: ReturnType<typeof setInterval> | undefined
+
+  private urlSources(): BlobStore {
+    return this.bridge.blobStore('plugin-source-urls')
+  }
+
+  private async setUrlSource(
+    id: string,
+    url: string | undefined
+  ): Promise<void> {
+    let saved = false
+    try {
+      saved = url
+        ? await this.urlSources().write(id, url)
+        : await this.urlSources().delete(id)
+    } catch (err) {
+      console.error(`[Taut] Failed to save the source URL for ${id}:`, err)
+      return
+    }
+    if (!saved) console.error(`[Taut] Failed to save the source URL for ${id}`)
+  }
+
+  /** Checks URL-imported plugins now, then every few hours. */
+  startUrlPluginUpdates(): void {
+    // safe mode exists to run no plugin code, so it doesn't fetch new code either
+    if (this.safeMode || this.urlCheckTimer !== undefined) return
+    this.runUrlCheck()
+    this.urlCheckTimer = setInterval(
+      () => this.runUrlCheck(),
+      PluginManager.URL_CHECK_MS
+    )
+  }
+
+  private runUrlCheck(): void {
+    this.checkUrlPlugins().catch((err) =>
+      console.error('[Taut] Plugin update check failed:', err)
+    )
+  }
+
+  private urlCheckRunning = false
+
+  /**
+   * Re-fetches each URL-imported plugin; a changed file replaces its code.
+   * Only https URLs are checked. Failures keep the current code, and a check
+   * never overrides a manual edit or a delete made while it was fetching.
+   */
+  async checkUrlPlugins(): Promise<void> {
+    if (this.urlCheckRunning) return
+    this.urlCheckRunning = true
+    try {
+      let ids: string[]
+      try {
+        ids = await this.urlSources().list()
+      } catch (err) {
+        console.error('[Taut] Failed to list plugin source URLs:', err)
+        return
+      }
+      for (const id of ids) {
+        const url = await this.urlSources()
+          .read(id)
+          .catch(() => null)
+        const current = this.plugins.get(id)
+        if (!url?.startsWith('https://') || current?.source !== 'user') continue
+        try {
+          const res = await this.bridge.fetch(url)
+          if (!res.ok) {
+            console.error(
+              `[Taut] Update check for ${id} failed (HTTP ${res.status})`
+            )
+            continue
+          }
+          const code = await res.text()
+          if (code === current.code) continue
+          const result = await this.installUserPlugin(
+            code,
+            id,
+            url,
+            current.code
+          )
+          if (result.ok) console.log(`[Taut] Updated plugin ${id} from ${url}`)
+          else
+            console.error(
+              `[Taut] Update for ${id} was refused: ${result.error}`
+            )
+        } catch (err) {
+          console.error(`[Taut] Update check for ${id} failed:`, err)
+        }
+      }
+    } finally {
+      this.urlCheckRunning = false
+    }
+  }
+
+  /**
+   * `expectedCode`, when given, is the code the caller last saw: the install is
+   * refused if the plugin has changed or been deleted since then.
+   */
   async installUserPlugin(
     code: string,
-    replacingId?: string
+    replacingId?: string,
+    sourceUrl?: string,
+    expectedCode?: string
   ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
     const store = this.bridge.userPlugins
     let id: string
@@ -1083,6 +1189,9 @@ export class PluginManager {
 
     return this.runExclusive(id, async () => {
       const existing = this.plugins.get(id)
+      if (expectedCode !== undefined && existing?.code !== expectedCode) {
+        return { ok: false, error: 'the plugin changed while it was updating' }
+      }
       if (existing && (existing.source === 'bundled' || id !== replacingId)) {
         return {
           ok: false,
@@ -1133,6 +1242,7 @@ export class PluginManager {
               : 'Failed to save plugin and rollback was incomplete',
         }
       }
+      await this.setUrlSource(id, sourceUrl)
       return { ok: true, id }
     })
   }
@@ -1205,6 +1315,7 @@ export class PluginManager {
       }
       await this.unloadPluginRaw(id)
       this.forgetPluginDataFlags(id)
+      await this.setUrlSource(id, undefined)
       return { ok: true }
     })
   }
